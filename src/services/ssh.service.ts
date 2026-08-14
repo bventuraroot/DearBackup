@@ -27,8 +27,9 @@ export class SSHService {
       host: config.host.trim(),
       port: Number(config.port) || 22,
       username: config.username.trim(),
-      readyTimeout: 20000,
+      readyTimeout: 45000,
       keepaliveInterval: 10000,
+      tryKeyboard: true,
       algorithms: {
         kex: [
           'curve25519-sha256',

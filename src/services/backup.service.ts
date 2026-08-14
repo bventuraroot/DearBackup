@@ -155,8 +155,8 @@ export class BackupService {
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => {
             try { conn.end(); } catch {}
-            reject(new Error(`Tiempo de espera agotado conectando por SSH a ${client.ssh_host}:${client.ssh_port} (25s)`));
-          }, 25000);
+            reject(new Error(`Tiempo de espera agotado conectando por SSH a ${client.ssh_host}:${client.ssh_port} (45s)`));
+          }, 45000);
 
           conn.on('ready', () => {
             clearTimeout(timer);
