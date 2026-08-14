@@ -278,9 +278,62 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('stat-active-clients').textContent = `${stats.clients.active} activos`;
       document.getElementById('stat-success-backups').textContent = stats.backups.success;
       document.getElementById('stat-success-rate').textContent = `${stats.backups.successRate}% efectividad`;
-      document.getElementById('stat-storage-used').textContent = `${stats.storage.totalMB} MB`;
+      document.getElementById('stat-storage-used').textContent = Number(stats.storage.totalMB) > 1024 ? `${stats.storage.totalGB} GB` : `${stats.storage.totalMB} MB`;
       document.getElementById('stat-running-backups').textContent = stats.backups.running;
       document.getElementById('stat-failed-backups').textContent = `${stats.backups.failed} fallos registrados`;
+
+      // Métricas de Almacenamiento Local (Disco Host)
+      if (stats.storage.local) {
+        const local = stats.storage.local;
+        const displayBackups = Number(local.backupsMB) > 1024 ? `${local.backupsGB} GB` : `${local.backupsMB} MB`;
+        const elBackups = document.getElementById('dash-local-backups-size');
+        const elFree = document.getElementById('dash-local-free-size');
+        const elTotal = document.getElementById('dash-local-total-size');
+        const elProgress = document.getElementById('dash-local-progress-bar');
+        const elBadge = document.getElementById('dash-local-percent-badge');
+
+        if (elBackups) elBackups.textContent = displayBackups;
+        if (elFree) elFree.textContent = Number(local.diskFreeGB) > 0 ? `${local.diskFreeGB} GB disponibles` : 'Disponible';
+        if (elTotal) elTotal.textContent = Number(local.diskTotalGB) > 0 ? `${local.diskTotalGB} GB` : '--';
+        if (elProgress) {
+          const pct = Math.max(2, Math.min(100, local.diskUsagePercent || (local.diskTotalBytes > 0 ? Math.round((local.diskUsedBytes / local.diskTotalBytes) * 100) : 10)));
+          elProgress.style.width = `${pct}%`;
+          if (pct > 85) {
+            elProgress.style.background = 'linear-gradient(90deg, #f59e0b, #ef4444)';
+          } else {
+            elProgress.style.background = 'linear-gradient(90deg, #38bdf8, #3b82f6)';
+          }
+        }
+        if (elBadge) elBadge.textContent = `${local.diskUsagePercent || 0}% Ocupado`;
+      }
+
+      // Métricas de Almacenamiento en la Nube (Cloudflare R2 / S3)
+      if (stats.storage.cloud) {
+        const cloud = stats.storage.cloud;
+        const displayUsed = Number(cloud.usedMB) > 1024 ? `${cloud.usedGB} GB` : `${cloud.usedMB} MB`;
+        const elUsed = document.getElementById('dash-cloud-used-size');
+        const elRemaining = document.getElementById('dash-cloud-remaining-size');
+        const elMax = document.getElementById('dash-cloud-max-size');
+        const elProgress = document.getElementById('dash-cloud-progress-bar');
+        const elBadge = document.getElementById('dash-cloud-percent-badge');
+
+        if (elUsed) elUsed.textContent = displayUsed;
+        if (elRemaining) elRemaining.textContent = `${cloud.remainingGB} GB libres`;
+        if (elMax) elMax.textContent = `${cloud.maxStorageGB} GB`;
+        if (elProgress) {
+          const pct = Math.max(cloud.usedBytes > 0 ? 3 : 0, Math.min(100, cloud.usagePercent || 0));
+          elProgress.style.width = `${pct}%`;
+          if (pct > 85) {
+            elProgress.style.background = 'linear-gradient(90deg, #f59e0b, #ef4444)';
+          } else {
+            elProgress.style.background = 'linear-gradient(90deg, #10b981, #059669)';
+          }
+        }
+        if (elBadge) {
+          elBadge.textContent = cloud.enabled ? `${cloud.usagePercent}% de Cuota` : 'Cloud Inactivo';
+          elBadge.className = cloud.enabled ? 'badge badge-success' : 'badge badge-outline';
+        }
+      }
 
       const tbody = document.getElementById('dashboard-recent-tbody');
       if (stats.recentLogs.length === 0) {
@@ -1611,6 +1664,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  const btnDashPurgeCloud = document.getElementById('btn-dash-purge-cloud');
+  if (btnDashPurgeCloud && btnPurgeCloud) {
+    btnDashPurgeCloud.addEventListener('click', () => btnPurgeCloud.click());
+  }
+
   // =========================================================================
   // 12. LIBERACIÓN / PURGA DE ESPACIO LOCAL
   // =========================================================================
@@ -1620,6 +1678,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnCancelPurgeModal = document.getElementById('purge-modal-cancel');
   const btnExecutePurge = document.getElementById('btn-execute-purge');
   const purgeStorageSummary = document.getElementById('purge-storage-summary');
+
+  const btnDashPurgeLocal = document.getElementById('btn-dash-purge-local');
+  if (btnDashPurgeLocal && btnOpenPurgeModal) {
+    btnDashPurgeLocal.addEventListener('click', () => btnOpenPurgeModal.click());
+  }
 
   if (btnOpenPurgeModal) {
     btnOpenPurgeModal.addEventListener('click', async () => {
