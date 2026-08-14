@@ -247,6 +247,7 @@ class BackupService {
             // 8. Replicación Opcional a la Nube (Cloudflare R2 / S3 / Backblaze)
             let isReplicatedCloud = 0;
             let cloudTarget = 'none';
+            let cloudPath = null;
             const cloudConfig = cloud_service_1.CloudService.getConfig();
             if (cloudConfig && cloudConfig.isEnabled) {
                 try {
@@ -255,18 +256,16 @@ class BackupService {
                     const remoteKey = `${client.id}/${path_1.default.basename(finalEncryptedFile)}`;
                     await cloud_service_1.CloudService.uploadFile(finalEncryptedFile, remoteKey);
                     isReplicatedCloud = 1;
+                    cloudPath = remoteKey;
                     this.emitLog(backupId, `✅ Replicación a la nube completada exitosamente.`, logAccumulator);
                 }
                 catch (cloudErr) {
                     this.emitLog(backupId, `⚠️ Advertencia en replicación Cloud: ${cloudErr.message}`, logAccumulator);
                 }
             }
-            // 9. Aplicar Políticas de Retención (Limpieza de copias viejas)
-            this.emitLog(backupId, `🧹 Ejecutando políticas de retención (Máx: ${client.retention_count} copias, ${client.retention_days} días)...`, logAccumulator);
-            await retention_service_1.RetentionService.applyRetentionForClient(client.id, client.retention_days, client.retention_count);
             const endTime = new Date();
             const durationSeconds = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
-            // 10. Actualizar registro en BD
+            // 9. Actualizar registro en BD como exitoso
             database_1.db.prepare(`
         UPDATE backup_logs SET
           status = 'success',
@@ -280,10 +279,17 @@ class BackupService {
           is_encrypted = 1,
           is_replicated_cloud = ?,
           cloud_target = ?,
+          cloud_path = ?,
           log_output = ?,
           end_time = ?
         WHERE id = ?
-      `).run(path_1.default.basename(finalEncryptedFile), finalEncryptedFile, finalStats.size, sha256Checksum, durationSeconds, hasDb ? 1 : 0, hasDtes ? 1 : 0, isReplicatedCloud, cloudTarget, logAccumulator.text, endTime.toISOString(), backupId);
+      `).run(path_1.default.basename(finalEncryptedFile), finalEncryptedFile, finalStats.size, sha256Checksum, durationSeconds, hasDb ? 1 : 0, hasDtes ? 1 : 0, isReplicatedCloud, cloudTarget, cloudPath, logAccumulator.text, endTime.toISOString(), backupId);
+            // 10. Aplicar Políticas de Retención (Limpieza de copias viejas en Local y en la Nube)
+            this.emitLog(backupId, `🧹 Ejecutando políticas de retención (Límite: ${client.retention_count || 2} copias, ${client.retention_days || 30} días)...`, logAccumulator);
+            const pruneRes = await retention_service_1.RetentionService.applyRetentionForClient(client.id, client.retention_days || 30, client.retention_count || 2);
+            if (pruneRes.prunedCloud > 0 || pruneRes.prunedLocal > 0) {
+                this.emitLog(backupId, `🗑️ Retención aplicada: ${pruneRes.prunedCloud} copias eliminadas de la Nube, ${pruneRes.prunedLocal} del disco local.`, logAccumulator);
+            }
             this.emitLog(backupId, `🎉 ¡Proceso de Respaldo Finalizado con Éxito en ${durationSeconds} segundos!`, logAccumulator);
             // 11. Enviar Notificaciones (Email y Telegram)
             await notify_service_1.NotifyService.notifyBackupResult(client.notify_email, !!client.notify_telegram, {

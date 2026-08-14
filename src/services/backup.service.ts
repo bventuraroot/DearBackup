@@ -297,6 +297,7 @@ export class BackupService {
       // 8. Replicación Opcional a la Nube (Cloudflare R2 / S3 / Backblaze)
       let isReplicatedCloud = 0;
       let cloudTarget = 'none';
+      let cloudPath: string | null = null;
 
       const cloudConfig = CloudService.getConfig();
       if (cloudConfig && cloudConfig.isEnabled) {
@@ -307,20 +308,17 @@ export class BackupService {
 
           await CloudService.uploadFile(finalEncryptedFile, remoteKey);
           isReplicatedCloud = 1;
+          cloudPath = remoteKey;
           this.emitLog(backupId, `✅ Replicación a la nube completada exitosamente.`, logAccumulator);
         } catch (cloudErr: any) {
           this.emitLog(backupId, `⚠️ Advertencia en replicación Cloud: ${cloudErr.message}`, logAccumulator);
         }
       }
 
-      // 9. Aplicar Políticas de Retención (Limpieza de copias viejas)
-      this.emitLog(backupId, `🧹 Ejecutando políticas de retención (Máx: ${client.retention_count} copias, ${client.retention_days} días)...`, logAccumulator);
-      await RetentionService.applyRetentionForClient(client.id, client.retention_days, client.retention_count);
-
       const endTime = new Date();
       const durationSeconds = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
 
-      // 10. Actualizar registro en BD
+      // 9. Actualizar registro en BD como exitoso
       db.prepare(`
         UPDATE backup_logs SET
           status = 'success',
@@ -334,6 +332,7 @@ export class BackupService {
           is_encrypted = 1,
           is_replicated_cloud = ?,
           cloud_target = ?,
+          cloud_path = ?,
           log_output = ?,
           end_time = ?
         WHERE id = ?
@@ -347,10 +346,18 @@ export class BackupService {
         hasDtes ? 1 : 0,
         isReplicatedCloud,
         cloudTarget,
+        cloudPath,
         logAccumulator.text,
         endTime.toISOString(),
         backupId
       );
+
+      // 10. Aplicar Políticas de Retención (Limpieza de copias viejas en Local y en la Nube)
+      this.emitLog(backupId, `🧹 Ejecutando políticas de retención (Límite: ${client.retention_count || 2} copias, ${client.retention_days || 30} días)...`, logAccumulator);
+      const pruneRes = await RetentionService.applyRetentionForClient(client.id, client.retention_days || 30, client.retention_count || 2);
+      if (pruneRes.prunedCloud > 0 || pruneRes.prunedLocal > 0) {
+        this.emitLog(backupId, `🗑️ Retención aplicada: ${pruneRes.prunedCloud} copias eliminadas de la Nube, ${pruneRes.prunedLocal} del disco local.`, logAccumulator);
+      }
 
       this.emitLog(backupId, `🎉 ¡Proceso de Respaldo Finalizado con Éxito en ${durationSeconds} segundos!`, logAccumulator);
 

@@ -227,19 +227,21 @@ router.get('/cloud', requireAuth, (req: AuthRequest, res: Response) => {
       bucket: '',
       accessKeyId: '',
       secretAccessKey: '',
-      isEnabled: false
+      isEnabled: false,
+      maxStorageGB: 10
     });
   }
 
   res.json({
     ...config,
+    maxStorageGB: config.maxStorageGB !== undefined ? config.maxStorageGB : 10,
     secretAccessKey: config.secretAccessKey ? '********' : ''
   });
 });
 
 router.post('/cloud', requireAuth, (req: AuthRequest, res: Response) => {
   const existing = CloudService.getConfig();
-  const { provider, endpoint, region, bucket, accessKeyId, secretAccessKey, isEnabled } = req.body;
+  const { provider, endpoint, region, bucket, accessKeyId, secretAccessKey, isEnabled, maxStorageGB } = req.body;
 
   let finalSecret = existing?.secretAccessKey || '';
   if (secretAccessKey && secretAccessKey !== '********') {
@@ -253,10 +255,11 @@ router.post('/cloud', requireAuth, (req: AuthRequest, res: Response) => {
     bucket,
     accessKeyId,
     secretAccessKey: finalSecret,
-    isEnabled: !!isEnabled
+    isEnabled: !!isEnabled,
+    maxStorageGB: maxStorageGB !== undefined ? Number(maxStorageGB) : 10
   });
 
-  res.json({ success: true, message: 'Configuración de Almacenamiento en la Nube guardada.' });
+  res.json({ success: true, message: 'Configuración de Almacenamiento en la Nube guardada con éxito.' });
 });
 
 router.post('/cloud/test', requireAuth, async (req: AuthRequest, res: Response) => {

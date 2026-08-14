@@ -12,6 +12,7 @@ export interface CloudStorageConfig {
   accessKeyId: string;
   secretAccessKey: string;
   isEnabled: boolean;
+  maxStorageGB?: number;
 }
 
 export class CloudService {

@@ -158,6 +158,7 @@ function initDatabase() {
         checkAndAddColumn('backup_logs', 'is_encrypted', 'INTEGER DEFAULT 1');
         checkAndAddColumn('backup_logs', 'is_replicated_cloud', 'INTEGER DEFAULT 0');
         checkAndAddColumn('backup_logs', 'cloud_target', 'TEXT');
+        checkAndAddColumn('backup_logs', 'cloud_path', 'TEXT');
         checkAndAddColumn('backup_logs', 'log_output', 'TEXT');
         checkAndAddColumn('backup_logs', 'error_message', 'TEXT');
         checkAndAddColumn('backup_logs', 'duration_seconds', 'INTEGER DEFAULT 0');

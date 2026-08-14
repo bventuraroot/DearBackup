@@ -9,6 +9,7 @@ import { BackupService, ClientData } from '../services/backup.service';
 import { CryptoService } from '../services/crypto.service';
 import { CloudService } from '../services/cloud.service';
 import { VaultService } from '../services/vault.service';
+import { RetentionService } from '../services/retention.service';
 
 const router = Router();
 
@@ -484,6 +485,22 @@ router.delete('/logs/:id', requireAuth, (req: AuthRequest, res: Response) => {
 
   db.prepare('DELETE FROM backup_logs WHERE id = ?').run(req.params.id);
   res.json({ success: true, message: 'Registro y archivo eliminados correctamente.' });
+});
+
+/**
+ * Forzar purga y aplicación estricta de retención de respaldos en la nube (R2 / S3)
+ */
+router.post('/purge-cloud', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await RetentionService.purgeAllClientsCloudRetentions();
+    res.json({
+      success: true,
+      totalCloudDeleted: result.totalCloudDeleted,
+      message: `¡Limpieza en la nube completada! Se eliminaron ${result.totalCloudDeleted} copias antiguas que excedían el límite de retención.`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Error durante la purga en la nube: ${err.message}` });
+  }
 });
 
 export default router;

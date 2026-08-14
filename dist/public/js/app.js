@@ -1391,6 +1391,9 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('cloud-region').value = cloud.region || 'auto';
       document.getElementById('cloud-access-key').value = cloud.accessKeyId || '';
       document.getElementById('cloud-secret-key').value = cloud.secretAccessKey || '';
+      if (document.getElementById('cloud-max-storage')) {
+        document.getElementById('cloud-max-storage').value = cloud.maxStorageGB !== undefined ? cloud.maxStorageGB : 10;
+      }
 
     } catch (err) {
       showToast('Error cargando configuración', 'error');
@@ -1554,9 +1557,10 @@ document.addEventListener('DOMContentLoaded', () => {
         endpoint: document.getElementById('cloud-endpoint').value,
         region: document.getElementById('cloud-region').value,
         accessKeyId: document.getElementById('cloud-access-key').value,
-        secretAccessKey: document.getElementById('cloud-secret-key').value
+        secretAccessKey: document.getElementById('cloud-secret-key').value,
+        maxStorageGB: Number(document.getElementById('cloud-max-storage').value) || 10
       });
-      showToast('Configuración Cloud S3 guardada', 'success');
+      showToast('Configuración Cloud S3 guardada con éxito', 'success');
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -1583,6 +1587,29 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(err.message, 'error');
     }
   });
+
+  // Botón de Purga Forzada de Copias Viejas en la Nube (R2 / S3)
+  const btnPurgeCloud = document.getElementById('btn-purge-cloud-retention');
+  if (btnPurgeCloud) {
+    btnPurgeCloud.addEventListener('click', async () => {
+      if (!confirm('¿Deseas purgar de tu almacenamiento en la nube todas las copias viejas que excedan el límite de retención de cada cliente?')) return;
+      const originalText = btnPurgeCloud.innerHTML;
+      btnPurgeCloud.disabled = true;
+      btnPurgeCloud.innerHTML = '<span>⏳ Purgando Cloud...</span>';
+
+      try {
+        const res = await API.post('/backups/purge-cloud', {});
+        showToast(res.message, 'success');
+        loadBackups();
+        loadDashboardMetrics();
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        btnPurgeCloud.disabled = false;
+        btnPurgeCloud.innerHTML = originalText;
+      }
+    });
+  }
 
   // =========================================================================
   // 12. LIBERACIÓN / PURGA DE ESPACIO LOCAL

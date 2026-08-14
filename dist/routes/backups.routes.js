@@ -13,6 +13,7 @@ const auth_routes_1 = require("./auth.routes");
 const backup_service_1 = require("../services/backup.service");
 const crypto_service_1 = require("../services/crypto.service");
 const vault_service_1 = require("../services/vault.service");
+const retention_service_1 = require("../services/retention.service");
 const router = (0, express_1.Router)();
 /**
  * Disparar respaldo de un cliente manualmente y retornar su backupId de inmediato
@@ -457,5 +458,21 @@ router.delete('/logs/:id', auth_routes_1.requireAuth, (req, res) => {
     }
     database_1.db.prepare('DELETE FROM backup_logs WHERE id = ?').run(req.params.id);
     res.json({ success: true, message: 'Registro y archivo eliminados correctamente.' });
+});
+/**
+ * Forzar purga y aplicación estricta de retención de respaldos en la nube (R2 / S3)
+ */
+router.post('/purge-cloud', auth_routes_1.requireAuth, async (req, res) => {
+    try {
+        const result = await retention_service_1.RetentionService.purgeAllClientsCloudRetentions();
+        res.json({
+            success: true,
+            totalCloudDeleted: result.totalCloudDeleted,
+            message: `¡Limpieza en la nube completada! Se eliminaron ${result.totalCloudDeleted} copias antiguas que excedían el límite de retención.`
+        });
+    }
+    catch (err) {
+        res.status(500).json({ error: `Error durante la purga en la nube: ${err.message}` });
+    }
 });
 exports.default = router;
