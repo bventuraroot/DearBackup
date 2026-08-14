@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
 import { db } from '../db/database';
@@ -88,7 +89,7 @@ export class CloudService {
   }
 
   /**
-   * Sube un archivo de backup a la nube
+   * Sube un archivo de backup a la nube con streaming de bajo consumo de memoria (Multipart / 5MB Chunks)
    */
   public static async uploadFile(localFilePath: string, remoteKey: string): Promise<string> {
     const config = this.getConfig();
@@ -98,14 +99,20 @@ export class CloudService {
 
     const client = this.getS3Client(config);
     const fileStream = fs.createReadStream(localFilePath);
-    const fileStats = fs.statSync(localFilePath);
 
-    await client.send(new PutObjectCommand({
-      Bucket: config.bucket,
-      Key: remoteKey,
-      Body: fileStream,
-      ContentLength: fileStats.size
-    }));
+    const parallelUploads3 = new Upload({
+      client,
+      params: {
+        Bucket: config.bucket,
+        Key: remoteKey,
+        Body: fileStream
+      },
+      queueSize: 2,
+      partSize: 5 * 1024 * 1024,
+      leavePartsOnError: false
+    });
+
+    await parallelUploads3.done();
 
     return remoteKey;
   }

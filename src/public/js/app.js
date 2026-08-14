@@ -344,7 +344,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const elProgress = document.getElementById('dash-ram-progress-bar');
         const elBadge = document.getElementById('dash-ram-health-badge');
 
-        if (elRamUsed) elRamUsed.textContent = `${sys.processRssMB} MB`;
+        if (elRamUsed) {
+          const usedMB = Number(sys.processRssMB) || 0;
+          elRamUsed.textContent = usedMB >= 1024 ? `${(usedMB / 1024).toFixed(2)} GB` : `${usedMB} MB`;
+        }
         if (elRamFree) {
           const freeGB = (sys.systemFreeMemMB / 1024).toFixed(1);
           elRamFree.textContent = Number(freeGB) > 1 ? `${freeGB} GB` : `${sys.systemFreeMemMB} MB`;
@@ -365,8 +368,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (elProgress) {
-          const ramPct = Math.max(3, Math.min(100, Math.round((sys.processRssMB / 512) * 100)));
+          const usedMB = Number(sys.processRssMB) || 0;
+          const ramPct = Math.max(3, Math.min(100, Math.round((usedMB / 1024) * 100)));
           elProgress.style.width = `${ramPct}%`;
+          if (usedMB > 500) {
+            elProgress.style.background = 'linear-gradient(90deg, #f59e0b, #ef4444)';
+          } else {
+            elProgress.style.background = 'linear-gradient(90deg, #a855f7, #6366f1)';
+          }
         }
 
         if (elBadge) {

@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CloudService = void 0;
 const client_s3_1 = require("@aws-sdk/client-s3");
+const lib_storage_1 = require("@aws-sdk/lib-storage");
 const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
 const fs_1 = __importDefault(require("fs"));
 const database_1 = require("../db/database");
@@ -77,7 +78,7 @@ class CloudService {
         }
     }
     /**
-     * Sube un archivo de backup a la nube
+     * Sube un archivo de backup a la nube con streaming de bajo consumo de memoria (Multipart / 5MB Chunks)
      */
     static async uploadFile(localFilePath, remoteKey) {
         const config = this.getConfig();
@@ -86,13 +87,18 @@ class CloudService {
         }
         const client = this.getS3Client(config);
         const fileStream = fs_1.default.createReadStream(localFilePath);
-        const fileStats = fs_1.default.statSync(localFilePath);
-        await client.send(new client_s3_1.PutObjectCommand({
-            Bucket: config.bucket,
-            Key: remoteKey,
-            Body: fileStream,
-            ContentLength: fileStats.size
-        }));
+        const parallelUploads3 = new lib_storage_1.Upload({
+            client,
+            params: {
+                Bucket: config.bucket,
+                Key: remoteKey,
+                Body: fileStream
+            },
+            queueSize: 2,
+            partSize: 5 * 1024 * 1024,
+            leavePartsOnError: false
+        });
+        await parallelUploads3.done();
         return remoteKey;
     }
     /**
