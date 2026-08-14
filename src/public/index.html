@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DearBackup - Orquestador Seguro de Respaldos (DTEs & Bases de Datos)</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- SimpleWebAuthn Browser Script -->
+  <script src="https://unpkg.com/@simplewebauthn/browser/dist/bundle/index.umd.min.js"></script>
+  <!-- CSS Stylesheet -->
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2338bdf8'><path d='M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 6h2v2h-2V7zm0 4h2v6h-2v-6z'/></svg>">
+</head>
+<body>
+
+  <!-- ========================================================================= -->
+  <!-- 1. PANTALLA DE ASISTENTE DE CONFIGURACIÓN INICIAL (ONBOARDING WIZARD) -->
+  <!-- ========================================================================= -->
+  <div id="setup-view" class="view-overlay hidden">
+    <div class="glass-card setup-card">
+      <div class="brand-header">
+        <div class="brand-logo">🛡️</div>
+        <h1>Bienvenido a <span>DearBackup</span></h1>
+        <p>Configuración inicial del orquestador seguro y vault de credenciales</p>
+      </div>
+
+      <form id="setup-form" class="flow-form">
+        <div class="form-group">
+          <label for="setup-username">Usuario Administrador</label>
+          <input type="text" id="setup-username" placeholder="admin" required value="admin">
+        </div>
+
+        <div class="form-group">
+          <label for="setup-password">Contraseña Maestra del Administrador</label>
+          <input type="password" id="setup-password" placeholder="Mínimo 8 caracteres" minlength="8" required>
+        </div>
+
+        <div class="form-group">
+          <label for="setup-vault-phrase">
+            Frase de Seguridad del Vault (Master Key)
+            <span class="tooltip" title="Esta frase se usa para derivar la clave AES-256-GCM que cifra todas las contraseñas de bases de datos y llaves SSH.">ℹ️</span>
+          </label>
+          <input type="password" id="setup-vault-phrase" placeholder="Frase secreta fuerte para cifrado" minlength="8" required>
+          <small class="helper-text">⚠️ Guarda esta frase en un lugar seguro. Es requerida para descifrar tus credenciales y respaldos.</small>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="setup-submit-btn">
+          <span>🚀 Inicializar Plataforma & Vault</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- 2. PANTALLA DE INICIO DE SESIÓN (PASSKEY & PASSWORD & 2FA) -->
+  <!-- ========================================================================= -->
+  <div id="login-view" class="view-overlay hidden">
+    <div class="glass-card login-card">
+      <div class="brand-header">
+        <div class="brand-logo">🛡️</div>
+        <h1>Dear<span>Backup</span></h1>
+        <p>Acceso Seguro con Passkey / Biometría & 2FA</p>
+      </div>
+
+      <!-- Botón de Login con Passkey / Biometría -->
+      <div id="passkey-login-container" class="mb-4">
+        <button type="button" class="btn btn-passkey btn-block btn-lg" id="btn-login-passkey">
+          <span>👆 Iniciar con Passkey (Touch ID / Face ID)</span>
+        </button>
+        <div class="form-divider"><span>o ingresa con contraseña</span></div>
+      </div>
+
+      <!-- Formulario de Login Estándar -->
+      <form id="login-form" class="flow-form">
+        <div class="form-group">
+          <label for="login-username">Usuario</label>
+          <input type="text" id="login-username" placeholder="admin" required autocomplete="username">
+        </div>
+
+        <div class="form-group">
+          <label for="login-password">Contraseña</label>
+          <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+
+        <div class="form-group">
+          <label for="login-vault-phrase">
+            Frase del Vault (Opcional si ya está desbloqueado)
+          </label>
+          <input type="password" id="login-vault-phrase" placeholder="Frase secreta para desbloquear Vault">
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="login-submit-btn">
+          <span>🔐 Iniciar Sesión</span>
+        </button>
+      </form>
+
+      <!-- Sub-formulario para Paso 2 (Código 2FA) -->
+      <form id="login-2fa-form" class="flow-form hidden">
+        <div class="info-callout">
+          <span class="info-icon">📲</span>
+          <div>
+            <strong>Autenticación en Dos Pasos (2FA):</strong>
+            <p>Abre Google Authenticator o Authy e ingresa tu código de 6 dígitos.</p>
+          </div>
+        </div>
+
+        <input type="hidden" id="login-2fa-temp-token">
+        
+        <div class="form-group text-center">
+          <label for="login-2fa-code" style="justify-content: center;">Código de Verificación (6 dígitos)</label>
+          <input type="text" id="login-2fa-code" class="otp-input" placeholder="000000" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required autofocus>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="login-2fa-submit-btn">
+          <span>✅ Validar Código 2FA</span>
+        </button>
+        <button type="button" class="btn btn-ghost btn-block btn-sm" id="btn-cancel-2fa-login">
+          ← Volver a inicio de sesión
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- 3. INTERFAZ PRINCIPAL DE LA APLICACIÓN (DASHBOARD APP) -->
+  <!-- ========================================================================= -->
+  <div id="app-view" class="app-layout hidden">
+    
+    <!-- Sidebar de Navegación -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-logo-small">🛡️</div>
+        <div class="brand-text">
+          <h2>Dear<span>Backup</span></h2>
+          <span class="badge badge-pulse">v1.0 Pro</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-link active" data-view="dashboard">
+          <span class="nav-icon">📊</span> Dashboard
+        </button>
+        <button class="nav-link" data-view="clients">
+          <span class="nav-icon">🏢</span> Clientes & Servidores
+        </button>
+        <button class="nav-link" data-view="backups">
+          <span class="nav-icon">📦</span> Respaldos & Historial
+        </button>
+        <button class="nav-link" data-view="security">
+          <span class="nav-icon">🔐</span> Seguridad & Llaves
+        </button>
+        <button class="nav-link" data-view="settings">
+          <span class="nav-icon">⚙️</span> Configuración
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="vault-status-indicator" id="vault-status-box">
+          <span class="status-dot"></span>
+          <span class="status-label">Vault Seguro: <strong id="vault-status-text">Activo</strong></span>
+        </div>
+        <button class="btn btn-ghost btn-sm btn-block" id="logout-btn">
+          <span>🚪 Cerrar Sesión</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Contenido Principal -->
+    <main class="main-content">
+      
+      <!-- Topbar Header -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 id="page-title">Panel de Control</h1>
+          <p id="page-subtitle">Supervisión y estado general de respaldos</p>
+        </div>
+
+        <div class="topbar-right">
+          <button class="btn btn-outline" id="global-ssh-key-btn">
+            <span>🔑 Ver Llave SSH Pública</span>
+          </button>
+          <button class="btn btn-primary" id="btn-run-all-backups">
+            <span>⚡ Respaldar Todos los Clientes</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="content-body">
+        
+        <!-- ================= VISTA: DASHBOARD ================= -->
+        <section id="view-dashboard" class="content-section active">
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-icon bg-blue">🏢</div>
+              <div class="metric-info">
+                <span class="metric-label">Clientes Configurados</span>
+                <h3 class="metric-value" id="stat-total-clients">0</h3>
+                <span class="metric-sub" id="stat-active-clients">0 activos</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon bg-green">✅</div>
+              <div class="metric-info">
+                <span class="metric-label">Respaldos Exitosos</span>
+                <h3 class="metric-value" id="stat-success-backups">0</h3>
+                <span class="metric-sub text-green" id="stat-success-rate">100% efectividad</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon bg-purple">💾</div>
+              <div class="metric-info">
+                <span class="metric-label">Almacenamiento Usado</span>
+                <h3 class="metric-value" id="stat-storage-used">0 MB</h3>
+                <span class="metric-sub">Cifrado AES-256</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon bg-amber">⚡</div>
+              <div class="metric-info">
+                <span class="metric-label">En Ejecución</span>
+                <h3 class="metric-value" id="stat-running-backups">0</h3>
+                <span class="metric-sub" id="stat-failed-backups">0 fallos registrados</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="glass-panel mt-6">
+            <div class="panel-header">
+              <h3>🕒 Actividad Reciente de Respaldos</h3>
+              <button class="btn btn-sm btn-ghost" id="refresh-dashboard-btn">🔄 Actualizar</button>
+            </div>
+            <div class="table-container">
+              <table class="data-table" id="dashboard-recent-table">
+                <thead>
+                  <tr>
+                    <th>Estado</th>
+                    <th>Cliente</th>
+                    <th>Inicio</th>
+                    <th>Duración</th>
+                    <th>Tamaño</th>
+                    <th>Destinos</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="dashboard-recent-tbody">
+                  <tr><td colspan="7" class="text-center py-6 text-muted">Cargando actividad...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= VISTA: CLIENTES ================= -->
+        <section id="view-clients" class="content-section">
+          <div class="section-toolbar">
+            <div class="search-box">
+              <input type="text" id="clients-search-input" placeholder="🔍 Buscar cliente por nombre o IP...">
+            </div>
+            <button class="btn btn-primary" id="btn-new-client">
+              <span>➕ Nuevo Cliente / Servidor</span>
+            </button>
+          </div>
+
+          <div class="clients-grid" id="clients-list-container"></div>
+        </section>
+
+        <!-- ================= VISTA: RESPALDOS & HISTORIAL ================= -->
+        <section id="view-backups" class="content-section">
+          <div class="section-toolbar">
+            <div class="filter-group">
+              <select id="filter-backup-client">
+                <option value="">Todos los clientes</option>
+              </select>
+              <select id="filter-backup-status">
+                <option value="">Todos los estados</option>
+                <option value="success">Exitosos</option>
+                <option value="failed">Fallidos</option>
+                <option value="running">En ejecución</option>
+              </select>
+            </div>
+            <div class="action-buttons-group" style="display: flex; gap: 8px;">
+              <button class="btn btn-outline" id="btn-open-purge-modal" style="border-color: var(--accent-amber); color: var(--accent-amber);" title="Liberar espacio en disco eliminando copias locales respaldadas en la nube">🧹 Liberar Espacio Local</button>
+              <button class="btn btn-outline" id="refresh-backups-btn">🔄 Refrescar</button>
+            </div>
+          </div>
+
+          <div class="glass-panel">
+            <div class="table-container">
+              <table class="data-table" id="backups-table">
+                <thead>
+                  <tr>
+                    <th>Estado</th>
+                    <th>Cliente</th>
+                    <th>Fecha & Hora</th>
+                    <th>Duración</th>
+                    <th>Tamaño</th>
+                    <th>Integridad SHA-256</th>
+                    <th>Cloud</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="backups-tbody">
+                  <tr><td colspan="8" class="text-center py-6 text-muted">Cargando registros de respaldos...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= VISTA: SEGURIDAD & LLAVES (VAULT & PASSKEYS & 2FA) ================= -->
+        <section id="view-security" class="content-section">
+          <div class="settings-grid">
+            
+            <!-- 1. CAMBIAR FRASE SECRETA DEL VAULT -->
+            <div class="glass-panel full-width">
+              <div class="panel-header">
+                <h3>🔐 Frase Secreta del Vault (Master Key de Cifrado)</h3>
+              </div>
+              <div class="info-callout">
+                <span class="info-icon">🛡️</span>
+                <div>
+                  <strong>Cifrado Maestro AES-256-GCM:</strong>
+                  <p>Al cambiar tu Frase Secreta, el sistema <strong>re-cifrará atómicamente</strong> todas las contraseñas de bases de datos, llaves privadas SSH y tokens de almacenamiento de tus clientes con la nueva llave derivada.</p>
+                </div>
+              </div>
+              <form id="change-vault-phrase-form" class="flow-form">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Contraseña de Administrador *</label>
+                    <input type="password" id="vault-admin-pass" placeholder="Tu contraseña actual" required>
+                  </div>
+                  <div class="form-group">
+                    <label>Frase Secreta Actual del Vault *</label>
+                    <input type="password" id="vault-current-phrase" placeholder="Frase secreta actual" required>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Nueva Frase Secreta del Vault * (Mínimo 8 caracteres)</label>
+                    <input type="password" id="vault-new-phrase" placeholder="Nueva frase secreta fuerte" minlength="8" required>
+                  </div>
+                  <div class="form-group">
+                    <label>Confirmar Nueva Frase Secreta *</label>
+                    <input type="password" id="vault-confirm-phrase" placeholder="Repite la nueva frase secreta" minlength="8" required>
+                  </div>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn btn-primary" id="btn-submit-change-vault">
+                    <span>🔒 Actualizar Frase Secreta & Re-cifrar Vault</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <!-- 2. CAMBIAR CONTRASEÑA DE ACCESO -->
+            <div class="glass-panel">
+              <div class="panel-header">
+                <h3>🔑 Contraseña de Administrador</h3>
+              </div>
+              <form id="change-password-form" class="flow-form">
+                <div class="form-group">
+                  <label>Contraseña Actual</label>
+                  <input type="password" id="pwd-current" placeholder="••••••••" required>
+                </div>
+                <div class="form-group">
+                  <label>Nueva Contraseña (Mínimo 8 caracteres)</label>
+                  <input type="password" id="pwd-new" placeholder="••••••••" minlength="8" required>
+                </div>
+                <div class="form-group">
+                  <label>Confirmar Nueva Contraseña</label>
+                  <input type="password" id="pwd-confirm" placeholder="••••••••" minlength="8" required>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn btn-primary">💾 Guardar Nueva Contraseña</button>
+                </div>
+              </form>
+            </div>
+
+            <!-- 3. AUTENTICACIÓN EN DOS PASOS (2FA / TOTP) -->
+            <div class="glass-panel">
+              <div class="panel-header">
+                <h3>📲 Autenticación de Dos Factores (2FA / TOTP)</h3>
+              </div>
+              <p class="text-muted" style="font-size: 0.85rem; margin-bottom: 1.25rem;">
+                Añade una capa extra de protección a tu cuenta solicitando un código de 6 dígitos desde Google Authenticator, Authy o 1Password al iniciar sesión.
+              </p>
+
+              <div id="2fa-status-container">
+                <div class="status-box mb-4">
+                  <span>Estado de 2FA:</span>
+                  <span id="2fa-badge" class="badge">Cargando...</span>
+                </div>
+                <button class="btn btn-outline" id="btn-setup-2fa">⚙️ Configurar 2FA con Código QR</button>
+                <button class="btn btn-ghost text-red hidden" id="btn-disable-2fa">❌ Desactivar 2FA</button>
+              </div>
+            </div>
+
+            <!-- 4. PASSKEYS / BIOMETRÍA -->
+            <div class="glass-panel full-width">
+              <div class="panel-header">
+                <h3>👆 Inicio de Sesión con Passkeys (Biometría / FIDO2)</h3>
+                <button class="btn btn-primary btn-sm" id="btn-register-passkey">
+                  <span>➕ Registrar este Dispositivo</span>
+                </button>
+              </div>
+              <p class="text-muted" style="font-size: 0.85rem; margin-bottom: 1rem;">
+                Inicia sesión al instante usando tu <strong>Touch ID, Face ID, Windows Hello o Llave de Seguridad (YubiKey)</strong> sin necesidad de escribir contraseñas.
+              </p>
+              
+              <div class="passkey-list" id="passkey-list-container">
+                <div class="text-muted">Cargando llaves registradas...</div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ================= VISTA: CONFIGURACIÓN ================= -->
+        <section id="view-settings" class="content-section">
+          <div class="settings-grid">
+            
+            <!-- Configuración SMTP -->
+            <div class="glass-panel">
+              <div class="panel-header">
+                <h3>📧 Notificaciones por Correo (SMTP)</h3>
+                <button type="button" class="btn btn-sm btn-outline" id="btn-open-smtp-tester">
+                  <span>🧪 Probar Correo SMTP</span>
+                </button>
+              </div>
+              <form id="smtp-settings-form" class="flow-form">
+                <div class="form-group checkbox-group">
+                  <label class="switch">
+                    <input type="checkbox" id="smtp-enabled">
+                    <span class="slider"></span>
+                  </label>
+                  <span>Habilitar notificaciones por correo electrónico</span>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Servidor SMTP (Host)</label>
+                    <input type="text" id="smtp-host" placeholder="smtp.gmail.com">
+                  </div>
+                  <div class="form-group">
+                    <label>Tipo de Conexión / Cifrado</label>
+                    <select id="smtp-encryption-type">
+                      <option value="tls" selected>TLS / STARTTLS (Recomendado - Puerto 587)</option>
+                      <option value="ssl">SSL / TLS Directo (Puerto 465)</option>
+                      <option value="none">Sin Cifrado / Ninguno (Puerto 25)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Puerto SMTP</label>
+                    <input type="number" id="smtp-port" placeholder="587" value="587">
+                  </div>
+                  <div class="form-group">
+                    <label>Usuario / Email</label>
+                    <input type="text" id="smtp-user" placeholder="tu-correo@gmail.com">
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Contraseña / App Password</label>
+                    <input type="password" id="smtp-pass" placeholder="••••••••">
+                  </div>
+                  <div class="form-group">
+                    <label>Nombre Remitente</label>
+                    <input type="text" id="smtp-from-name" placeholder="DearBackup Notifier">
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label>Email Remitente</label>
+                  <input type="email" id="smtp-from-email" placeholder="backups@tudominio.com">
+                </div>
+
+                <div class="form-actions">
+                  <button type="button" class="btn btn-outline" id="btn-test-smtp">🧪 Probar Envío</button>
+                  <button type="submit" class="btn btn-primary">💾 Guardar SMTP</button>
+                </div>
+              </form>
+            </div>
+
+            <!-- Configuración Telegram -->
+            <div class="glass-panel">
+              <div class="panel-header">
+                <h3>📱 Alertas Instantáneas por Telegram</h3>
+              </div>
+              <form id="telegram-settings-form" class="flow-form">
+                <div class="form-group checkbox-group">
+                  <label class="switch">
+                    <input type="checkbox" id="telegram-enabled">
+                    <span class="slider"></span>
+                  </label>
+                  <span>Habilitar alertas inmediatas al móvil por Telegram</span>
+                </div>
+
+                <div class="form-group">
+                  <label>Bot Token (de @BotFather)</label>
+                  <input type="password" id="telegram-bot-token" placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ">
+                  <small class="helper-text">Crea tu bot con <strong>@BotFather</strong> en Telegram para obtener tu token.</small>
+                </div>
+
+                <div class="form-group">
+                  <label>Chat ID / ID de Grupo o Canal</label>
+                  <div style="display: flex; gap: 8px;">
+                    <input type="text" id="telegram-chat-id" placeholder="Ej: 123456789 o -100123456789" style="flex: 1;">
+                    <button type="button" class="btn btn-outline btn-sm" id="btn-detect-telegram-chat" title="Detecta tu Chat ID automáticamente si ya le escribiste un mensaje a tu bot">
+                      <span>🔍 Auto-Detectar</span>
+                    </button>
+                  </div>
+                  <small class="helper-text">💡 Escríbele cualquier mensaje (ej. <em>"hola"</em>) a tu bot en Telegram y haz clic en <strong>Auto-Detectar</strong>.</small>
+                </div>
+
+                <div class="form-actions">
+                  <button type="button" class="btn btn-outline" id="btn-test-telegram">🧪 Probar Telegram</button>
+                  <button type="submit" class="btn btn-primary">💾 Guardar Telegram</button>
+                </div>
+              </form>
+            </div>
+
+            <!-- Configuración Cloud S3 / Cloudflare R2 / Backblaze -->
+            <div class="glass-panel full-width">
+              <div class="panel-header">
+                <h3>☁️ Almacenamiento en la Nube (Cloudflare R2 / S3 / Backblaze B2 / Wasabi)</h3>
+              </div>
+              <form id="cloud-settings-form" class="flow-form">
+                <div class="form-group checkbox-group">
+                  <label class="switch">
+                    <input type="checkbox" id="cloud-enabled">
+                    <span class="slider"></span>
+                  </label>
+                  <span>Replicar automáticamente los respaldos cifrados a la nube</span>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Proveedor</label>
+                    <select id="cloud-provider">
+                      <option value="r2">Cloudflare R2 (Recomendado - $0 Egress)</option>
+                      <option value="s3">Amazon AWS S3</option>
+                      <option value="b2">Backblaze B2</option>
+                      <option value="wasabi">Wasabi Hot Cloud</option>
+                      <option value="custom">Servidor MinIO / S3 Compatible Custom</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Bucket Name</label>
+                    <input type="text" id="cloud-bucket" placeholder="nombre-de-tu-bucket">
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Endpoint URL (Necesario para R2, B2 o MinIO)</label>
+                    <input type="text" id="cloud-endpoint" placeholder="https://<account_id>.r2.cloudflarestorage.com">
+                  </div>
+                  <div class="form-group">
+                    <label>Región</label>
+                    <input type="text" id="cloud-region" placeholder="auto o us-east-1" value="auto">
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Access Key ID</label>
+                    <input type="text" id="cloud-access-key" placeholder="Access Key ID">
+                  </div>
+                  <div class="form-group">
+                    <label>Secret Access Key</label>
+                    <input type="password" id="cloud-secret-key" placeholder="••••••••">
+                  </div>
+                </div>
+
+                <div class="form-actions">
+                  <button type="button" class="btn btn-outline" id="btn-test-cloud">🧪 Probar Conexión Cloud</button>
+                  <button type="submit" class="btn btn-primary">💾 Guardar Almacenamiento Cloud</button>
+                </div>
+              </form>
+            </div>
+
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: PROBADOR DE CORREO SMTP & DIAGNÓSTICO -->
+  <!-- ========================================================================= -->
+  <div id="modal-smtp-tester" class="modal-overlay hidden">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h2>🧪 Probador de Notificaciones por Correo</h2>
+        <button class="modal-close-btn" id="modal-smtp-tester-close">✕</button>
+      </div>
+      <div class="modal-body flow-form">
+        <p class="text-muted" style="font-size: 0.85rem;">
+          Envía un correo de prueba con la plantilla oficial de DearBackup para verificar la entrega y el protocolo de seguridad:
+        </p>
+
+        <div class="form-group">
+          <label for="smtp-test-target-email">Enviar Correo de Prueba a:</label>
+          <input type="email" id="smtp-test-target-email" placeholder="tu-correo-personal@gmail.com" required>
+        </div>
+
+        <button type="button" class="btn btn-primary btn-block btn-lg" id="btn-execute-smtp-test">
+          <span>🚀 Enviar Correo de Prueba Ahora</span>
+        </button>
+
+        <div id="smtp-test-result-box" class="mt-4 hidden">
+          <label>Resultado del Diagnóstico:</label>
+          <div id="smtp-test-result-content" class="code-snippet" style="white-space: pre-wrap; font-size: 0.82rem; margin-top: 6px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: CONFIGURACIÓN 2FA (QR CODE) -->
+  <!-- ========================================================================= -->
+  <div id="modal-2fa" class="modal-overlay hidden">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h2>📲 Configurar Autenticador 2FA</h2>
+        <button class="modal-close-btn" id="modal-2fa-close">✕</button>
+      </div>
+      <div class="modal-body flow-form text-center">
+        <p class="text-muted" style="font-size: 0.85rem;">
+          1. Abre Google Authenticator, Authy o tu app favorita y escanea el siguiente código QR:
+        </p>
+        
+        <div class="qr-container my-3" style="display: flex; justify-content: center;">
+          <img id="2fa-qr-image" src="" alt="Código QR 2FA" style="border-radius: 12px; background: white; padding: 10px; width: 200px; height: 200px;">
+        </div>
+
+        <div class="secret-key-box mb-3">
+          <span class="text-dim" style="font-size: 0.75rem;">¿No puedes escanear? Clave manual:</span>
+          <code id="2fa-secret-text" style="display: block; font-size: 0.9rem; color: var(--accent-cyan); font-weight: bold; letter-spacing: 0.1em; margin-top: 4px;"></code>
+        </div>
+
+        <div class="form-group">
+          <label for="2fa-verify-code" style="justify-content: center;">2. Ingresa el código de 6 dígitos que muestra tu app:</label>
+          <input type="text" id="2fa-verify-code" class="otp-input" placeholder="000000" maxlength="6" pattern="[0-9]{6}" required>
+        </div>
+
+        <button type="button" class="btn btn-primary btn-block btn-lg" id="btn-confirm-enable-2fa">
+          <span>🔒 Activar 2FA Ahora</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: REGISTRO DE PASSKEY -->
+  <!-- ========================================================================= -->
+  <div id="modal-register-passkey" class="modal-overlay hidden">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h2>🔑 Registrar Passkey / Biometría</h2>
+        <button class="modal-close-btn" id="modal-passkey-close">✕</button>
+      </div>
+      <div class="modal-body flow-form">
+        <div class="info-callout">
+          <span class="info-icon">👆</span>
+          <div>
+            <strong>Touch ID / Face ID / Llave de Seguridad:</strong>
+            <p>Se te pedirá confirmar tu huella dactilar, rostro o PIN del dispositivo para crear la Passkey.</p>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="passkey-device-name">Nombre descriptivo de este dispositivo</label>
+          <input type="text" id="passkey-device-name" placeholder="Ej: MacBook Pro de Trabajo, iPhone 15, YubiKey">
+        </div>
+
+        <button type="button" class="btn btn-passkey btn-block btn-lg" id="btn-start-passkey-registration">
+          <span>👆 Comenzar Registro Biométrico</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: CLIENTE (CREAR / EDITAR) -->
+  <!-- ========================================================================= -->
+  <div id="client-modal" class="modal-overlay hidden">
+    <div class="glass-card modal-card modal-lg">
+      <div class="modal-header">
+        <h2 id="client-modal-title">➕ Configurar Nuevo Cliente</h2>
+        <button class="modal-close-btn" id="client-modal-close">✕</button>
+      </div>
+
+      <form id="client-form" class="flow-form">
+        <input type="hidden" id="client-form-id">
+
+        <div class="form-tabs">
+          <button type="button" class="tab-btn active" data-tab="tab-general">1. General & SSH</button>
+          <button type="button" class="tab-btn" data-tab="tab-database">2. Base de Datos</button>
+          <button type="button" class="tab-btn" data-tab="tab-dtes">3. DTEs & Facturación</button>
+          <button type="button" class="tab-btn" data-tab="tab-schedule">4. Programación & Alertas</button>
+        </div>
+
+        <div id="tab-general" class="tab-content active">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Nombre del Cliente / Empresa *</label>
+              <input type="text" id="client-name" placeholder="Empresa Demo S.A." required>
+            </div>
+            <div class="form-group">
+              <label>Etiquetas / Tags</label>
+              <input type="text" id="client-tags" placeholder="Producción, Facturación, Cliente VIP">
+            </div>
+          </div>
+
+          <div class="form-divider"><span>Acceso Remoto SSH</span></div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Host / Dirección IP Remota *</label>
+              <input type="text" id="client-ssh-host" placeholder="203.0.113.10 o cliente.com" required>
+            </div>
+            <div class="form-group">
+              <label>Puerto SSH</label>
+              <input type="number" id="client-ssh-port" placeholder="22" value="22" required>
+            </div>
+            <div class="form-group">
+              <label>Usuario SSH *</label>
+              <input type="text" id="client-ssh-user" placeholder="root o ubuntu" value="root" required>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Tipo de Autenticación SSH</label>
+            <div class="radio-group" style="display: flex; flex-direction: column; gap: 8px;">
+              <label><input type="radio" name="client-ssh-auth-type" value="key" checked> 🛡️ <strong>Llave SSH del Sistema</strong> (Recomendado - Automático sin contraseña)</label>
+              <label><input type="radio" name="client-ssh-auth-type" value="custom_key"> 🔑 <strong>Mi Llave Privada Personalizada</strong> (con o sin Passphrase)</label>
+              <label><input type="radio" name="client-ssh-auth-type" value="password"> 🔐 <strong>Contraseña SSH del Servidor</strong></label>
+            </div>
+          </div>
+
+          <!-- Contraseña SSH -->
+          <div id="ssh-pass-container" class="form-group hidden">
+            <label>Contraseña SSH del Usuario</label>
+            <input type="password" id="client-ssh-password" placeholder="••••••••">
+          </div>
+
+          <!-- Llave Privada Personalizada + Passphrase -->
+          <div id="ssh-custom-key-container" class="flow-form hidden" style="background: rgba(15, 23, 42, 0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div class="form-group">
+              <label>Pega tu Llave Privada SSH *</label>
+              <textarea id="client-ssh-private-key" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----" rows="4" class="code-area"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Passphrase de tu Llave Privada <span class="tooltip" title="Si tu llave privada está protegida con contraseña, escríbela aquí. Se guardará cifrada con AES-256-GCM.">ℹ️</span></label>
+              <input type="password" id="client-ssh-passphrase" placeholder="Contraseña de la llave privada (dejar vacío si no tiene)">
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-database" class="tab-content">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Motor de Base de Datos</label>
+              <select id="client-db-type">
+                <option value="mysql">MySQL / MariaDB (mysqldump)</option>
+                <option value="postgres">PostgreSQL (pg_dump)</option>
+                <option value="none">Sin Base de Datos (Solo respaldar archivos/DTEs)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Modo de Conexión de BD</label>
+              <select id="client-db-connection-mode">
+                <option value="ssh_tunnel" selected>🔒 Túnel SSH Local (Recomendado - 127.0.0.1)</option>
+                <option value="docker_container">🐳 Contenedor Docker en el VPS (docker exec)</option>
+                <option value="direct_tcp">🌐 Conexión Directa TCP/IP (AWS RDS / Cloud DB)</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="db-fields-container">
+            <!-- Campo condicional para Contenedor Docker -->
+            <div id="db-docker-container-group" class="form-group hidden" style="background: rgba(30, 41, 59, 0.5); padding: 10px; border-radius: 8px; border: 1px dashed var(--accent-cyan);">
+              <label>Nombre del Contenedor Docker en el VPS *</label>
+              <input type="text" id="client-db-docker-container" placeholder="Ej: mysql-server, mariadb_app, postgres-db">
+              <small class="helper-text">DearBackup ejecutará el volcado con <code>docker exec &lt;contenedor&gt; mysqldump ...</code> vía SSH.</small>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label id="lbl-db-host">Host de BD (Interno en el servidor)</label>
+                <input type="text" id="client-db-host" value="127.0.0.1" placeholder="127.0.0.1">
+              </div>
+              <div class="form-group">
+                <label>Puerto BD</label>
+                <input type="number" id="client-db-port" value="3306" placeholder="3306">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>Nombre de la Base de Datos</label>
+                <input type="text" id="client-db-name" placeholder="facturacion_db">
+              </div>
+              <div class="form-group">
+                <label>Usuario de BD</label>
+                <input type="text" id="client-db-user" placeholder="root o facturacion_user" value="root">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Contraseña de la Base de Datos *</label>
+              <input type="password" id="client-db-pass" placeholder="Contraseña de tu usuario MySQL (ej. de cPanel)">
+              <small class="helper-text">Ingresa la contraseña de tu usuario de base de datos para permitir el volcado (mysqldump).</small>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-dtes" class="tab-content">
+          <div class="info-callout">
+            <span class="info-icon">💡</span>
+            <div>
+              <strong>Archivos de Facturación Electrónica:</strong>
+              <p>Indica la ruta absoluta en el servidor remoto donde tu sistema guarda los XMLs firmados, PDFs de DTEs y certificados digitales.</p>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Ruta de Carpeta de DTEs / Archivos (Opcional)</label>
+            <input type="text" id="client-dtes-path" placeholder="Dejar vacío si SOLO deseas respaldar la Base de Datos">
+            <small class="helper-text">💡 <strong>Solo Base de Datos:</strong> Si dejas este campo en blanco, DearBackup solo extraerá y respaldará la base de datos SQL de forma súper rápida.</small>
+          </div>
+        </div>
+
+        <div id="tab-schedule" class="tab-content">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Frecuencia de Respaldo (Expresión Cron)</label>
+              <input type="text" id="client-cron-schedule" value="0 2 * * *" placeholder="0 2 * * *">
+              <small class="helper-text">Ejemplo: "0 2 * * *" = Todos los días a las 2:00 AM</small>
+            </div>
+            <div class="form-group">
+              <label>Estado del Cliente</label>
+              <select id="client-is-active">
+                <option value="1">🟢 Activo (Ejecutar según cron)</option>
+                <option value="0">⚪ Pausado (Solo manual)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-divider"><span>Políticas de Retención (Ahorro de Espacio)</span></div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Retención por Días</label>
+              <input type="number" id="client-retention-days" value="30" min="1">
+            </div>
+            <div class="form-group">
+              <label>Máximo de Copias a Conservar</label>
+              <input type="number" id="client-retention-count" value="14" min="1">
+            </div>
+          </div>
+
+          <div class="form-divider"><span>Alertas por Cliente</span></div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Email de Notificación de este Cliente</label>
+              <input type="email" id="client-notify-email" placeholder="admin@cliente.com">
+            </div>
+            <div class="form-group checkbox-group mt-6">
+              <label class="switch">
+                <input type="checkbox" id="client-notify-telegram" checked>
+                <span class="slider"></span>
+              </label>
+              <span>Alertar a Telegram</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" id="btn-test-client-connection">
+            <span>🧪 Probar Conexión en 1 Clic</span>
+          </button>
+          <div class="footer-actions">
+            <button type="button" class="btn btn-ghost" id="client-modal-cancel">Cancelar</button>
+            <button type="submit" class="btn btn-primary" id="client-form-submit">💾 Guardar Cliente</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: TERMINAL / LOGS EN VIVO -->
+  <!-- ========================================================================= -->
+  <div id="terminal-modal" class="modal-overlay hidden">
+    <div class="glass-card modal-card modal-lg terminal-card">
+      <div class="modal-header terminal-header">
+        <div class="terminal-title">
+          <span class="terminal-dot bg-red"></span>
+          <span class="terminal-dot bg-amber"></span>
+          <span class="terminal-dot bg-green"></span>
+          <span id="terminal-client-title">Consola de Respaldo en Vivo</span>
+        </div>
+        <button class="modal-close-btn" id="terminal-modal-close">✕</button>
+      </div>
+
+      <div class="terminal-body" id="terminal-output"></div>
+
+      <div class="terminal-footer">
+        <span class="terminal-status" id="terminal-live-status">Conectando streaming...</span>
+        <div class="terminal-actions">
+          <button class="btn btn-sm btn-ghost" id="btn-copy-terminal">📋 Copiar Logs</button>
+          <button class="btn btn-sm btn-outline" id="btn-clear-terminal">Limpiar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: EXPLORADOR DE ARCHIVOS DEL RESPALDO -->
+  <!-- ========================================================================= -->
+  <div id="inspect-backup-modal" class="modal-overlay hidden">
+    <div class="glass-card modal-card modal-lg">
+      <div class="modal-header">
+        <h2 id="inspect-modal-title">🔍 Contenido del Respaldo</h2>
+        <button class="modal-close-btn" id="inspect-modal-close">✕</button>
+      </div>
+      <div class="modal-body flow-form">
+        <p class="text-muted" id="inspect-modal-subtitle">Estructura de archivos y bases de datos contenidas dentro del paquete cifrado:</p>
+        
+        <div class="table-responsive" style="max-height: 380px; overflow-y: auto; background: rgba(15, 23, 42, 0.6); border-radius: 8px; border: 1px solid var(--border-color);">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Archivo / Componente</th>
+                <th>Tamaño</th>
+                <th>Permisos</th>
+              </tr>
+            </thead>
+            <tbody id="inspect-tbody">
+              <tr><td colspan="3" class="text-center py-4 text-muted">Cargando e inspeccionando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <span id="inspect-total-size" class="text-muted" style="font-size: 0.85rem;"></span>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-outline" id="btn-inspect-download-dec">🔓 Descargar Descifrado (.tar.gz)</button>
+          <button class="btn btn-ghost" id="btn-inspect-close">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: LLAVE SSH PÚBLICA GLOBAL -->
+  <!-- ========================================================================= -->
+  <div id="ssh-key-modal" class="modal-overlay hidden">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h2>🔑 Llave Pública SSH de DearBackup</h2>
+        <button class="modal-close-btn" id="ssh-key-modal-close">✕</button>
+      </div>
+      <div class="modal-body flow-form">
+        <p class="text-muted">Copia esta llave pública en el archivo <code>~/.ssh/authorized_keys</code> de tus servidores clientes para permitir la conexión sin contraseña:</p>
+        
+        <textarea id="ssh-public-key-display" readonly rows="6" class="code-area"></textarea>
+
+        <div class="info-callout mt-4">
+          <span class="info-icon">⚡</span>
+          <div>
+            <strong>Comando rápido de instalación en tu servidor cliente:</strong>
+            <pre class="code-snippet" id="ssh-copy-command">curl -s http://.../api/ssh-key | cat >> ~/.ssh/authorized_keys</pre>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-block mt-4" id="btn-copy-ssh-key">
+          <span>📋 Copiar Llave Pública</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: GENERAR ENLACE TEMPORAL DE DESCARGA -->
+  <!-- ========================================================================= -->
+  <div id="share-link-modal" class="modal-overlay hidden">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h2>🔗 Enlace de Descarga Seguro</h2>
+        <button class="modal-close-btn" id="share-link-modal-close">✕</button>
+      </div>
+      <div class="modal-body flow-form">
+        <input type="hidden" id="share-backup-id">
+        
+        <div class="form-row">
+          <div class="form-group">
+            <label>Tiempo de Expiración</label>
+            <select id="share-hours">
+              <option value="24">24 horas</option>
+              <option value="48" selected>48 horas</option>
+              <option value="72">72 horas</option>
+              <option value="168">7 días</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Máximo de Descargas</label>
+            <input type="number" id="share-max-downloads" value="3" min="1" max="50">
+          </div>
+        </div>
+
+        <button type="button" class="btn btn-primary btn-block" id="btn-generate-share-link">
+          <span>⚡ Generar Enlace Seguro</span>
+        </button>
+
+        <div id="share-result-container" class="mt-4 hidden">
+          <label>Enlace Generado:</label>
+          <div class="copy-input-group">
+            <input type="text" id="share-generated-url" readonly>
+            <button class="btn btn-outline" id="btn-copy-generated-url">Copiar</button>
+          </div>
+          <small class="helper-text text-green">✅ Este enlace permite descargar el archivo cifrado de manera segura sin ingresar al panel.</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: LIBERAR ESPACIO DE ALMACENAMIENTO LOCAL -->
+  <!-- ========================================================================= -->
+  <div id="purge-space-modal" class="modal-overlay hidden">
+    <div class="glass-card modal-card" style="max-width: 560px;">
+      <div class="modal-header">
+        <h2>🧹 Liberar Espacio en Disco Local</h2>
+        <button class="modal-close-btn" id="purge-modal-close">✕</button>
+      </div>
+      <div class="modal-body flow-form">
+        <div class="info-callout">
+          <span class="info-icon">💾</span>
+          <div>
+            <strong>Estado del Almacenamiento Local:</strong>
+            <p id="purge-storage-summary" class="mt-1" style="font-size: 13px;">Calculando espacio ocupado...</p>
+          </div>
+        </div>
+
+        <div class="form-group mt-4">
+          <label>Selecciona el modo de liberación:</label>
+          <div class="radio-group-vertical mt-2" style="display: flex; flex-direction: column; gap: 10px;">
+            <label class="glass-panel" style="display: flex; gap: 12px; padding: 12px; cursor: pointer; border-radius: 8px;">
+              <input type="radio" name="purge-mode" value="cloud_only" checked style="margin-top: 4px;">
+              <div>
+                <strong>☁️ Purgar copias locales ya respaldadas en la Nube (Recomendado)</strong>
+                <p class="text-muted" style="font-size: 12px; margin-top: 2px;">Elimina los archivos del disco de aquellos respaldos que ya están a salvo en Cloudflare R2 / S3. Podrás seguir inspeccionándolos y descargándolos.</p>
+              </div>
+            </label>
+
+            <label class="glass-panel" style="display: flex; gap: 12px; padding: 12px; cursor: pointer; border-radius: 8px;">
+              <input type="radio" name="purge-mode" value="temp_only" style="margin-top: 4px;">
+              <div>
+                <strong>🧹 Limpiar únicamente archivos temporales huérfanos (.temp_*)</strong>
+                <p class="text-muted" style="font-size: 12px; margin-top: 2px;">Elimina restos temporales de descargas interrumpidas o canceladas.</p>
+              </div>
+            </label>
+
+            <label class="glass-panel" style="display: flex; gap: 12px; padding: 12px; cursor: pointer; border-radius: 8px; border-color: rgba(239, 68, 68, 0.3);">
+              <input type="radio" name="purge-mode" value="all" style="margin-top: 4px;">
+              <div>
+                <strong style="color: var(--accent-red);">⚠️ Purgar TODO el almacenamiento local de respaldos</strong>
+                <p class="text-muted" style="font-size: 12px; margin-top: 2px;">Elimina todos los archivos de respaldo almacenados en el disco local.</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-footer mt-6" style="display: flex; gap: 12px; justify-content: flex-end;">
+          <button type="button" class="btn btn-ghost" id="purge-modal-cancel">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="btn-execute-purge" style="background: var(--accent-amber); border-color: var(--accent-amber); color: #000;">
+            <span>🗑️ Ejecutar Purga y Liberar Espacio</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

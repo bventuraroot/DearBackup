@@ -1,0 +1,23 @@
+services:
+  dearbackup:
+    build: .
+    container_name: dearbackup-app
+    restart: unless-stopped
+    ports:
+      - "3050:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - APP_SECRET=dearbackup_ultra_secure_master_token_2026_change_me
+      - JWT_SECRET=dearbackup_jwt_secret_token_change_me
+      - APP_URL=http://localhost:3000
+      - TZ=America/El_Salvador
+    volumes:
+      - ./data:/app/data
+      - ./backups:/app/backups
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/auth/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
