@@ -1717,6 +1717,26 @@ document.addEventListener('DOMContentLoaded', () => {
     btnDashPurgeCloud.addEventListener('click', () => btnPurgeCloud.click());
   }
 
+  // Botón de Liberación de Memoria RAM (Garbage Collection)
+  const btnFreeRam = document.getElementById('btn-free-ram-gc');
+  if (btnFreeRam) {
+    btnFreeRam.addEventListener('click', async () => {
+      const originalText = btnFreeRam.innerHTML;
+      btnFreeRam.disabled = true;
+      btnFreeRam.innerHTML = '<span>⏳...</span>';
+      try {
+        const res = await API.post('/stats/free-memory', {});
+        showToast(res.message, 'success');
+        loadDashboard();
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        btnFreeRam.disabled = false;
+        btnFreeRam.innerHTML = originalText;
+      }
+    });
+  }
+
   // =========================================================================
   // 12. LIBERACIÓN / PURGA DE ESPACIO LOCAL
   // =========================================================================

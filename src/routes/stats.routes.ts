@@ -141,4 +141,24 @@ router.get('/dashboard', requireAuth, (req: AuthRequest, res: Response) => {
   });
 });
 
+/**
+ * Forzar recolección de basura y liberación de memoria RAM en tiempo real
+ */
+router.post('/free-memory', requireAuth, (req: AuthRequest, res: Response) => {
+  const beforeMem = process.memoryUsage().rss / (1024 * 1024);
+  if ((global as any).gc) {
+    try { (global as any).gc(); } catch {}
+  }
+  const afterMem = process.memoryUsage().rss / (1024 * 1024);
+  const freedMB = Math.max(0, beforeMem - afterMem).toFixed(1);
+
+  res.json({
+    success: true,
+    beforeMB: beforeMem.toFixed(1),
+    afterMB: afterMem.toFixed(1),
+    freedMB,
+    message: `¡Memoria RAM liberada con éxito! Se recuperaron ${freedMB} MB (Consumo actual: ${afterMem.toFixed(1)} MB).`
+  });
+});
+
 export default router;

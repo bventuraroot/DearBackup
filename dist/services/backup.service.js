@@ -300,6 +300,13 @@ class BackupService {
                 fileName: path_1.default.basename(finalEncryptedFile),
                 checksum: sha256Checksum
             });
+            // Forzar recolección de basura para liberar buffers de memoria inmediatamente
+            if (global.gc) {
+                try {
+                    global.gc();
+                }
+                catch { }
+            }
             return { success: true, logId: backupId };
         }
         catch (err) {
@@ -328,6 +335,12 @@ class BackupService {
                 fileSizeBytes: 0,
                 errorMessage: err.message
             });
+            if (global.gc) {
+                try {
+                    global.gc();
+                }
+                catch { }
+            }
             return { success: false, logId: backupId, error: err.message };
         }
     }

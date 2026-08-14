@@ -371,6 +371,11 @@ export class BackupService {
         checksum: sha256Checksum
       });
 
+      // Forzar recolección de basura para liberar buffers de memoria inmediatamente
+      if ((global as any).gc) {
+        try { (global as any).gc(); } catch {}
+      }
+
       return { success: true, logId: backupId };
 
     } catch (err: any) {
@@ -408,6 +413,10 @@ export class BackupService {
         fileSizeBytes: 0,
         errorMessage: err.message
       });
+
+      if ((global as any).gc) {
+        try { (global as any).gc(); } catch {}
+      }
 
       return { success: false, logId: backupId, error: err.message };
     }

@@ -319,7 +319,12 @@
                     <span style="font-size: 18px;">⚡</span>
                     <strong style="font-size: 14px; color: var(--text-main);">Memoria RAM & Salud Docker</strong>
                   </div>
-                  <span class="badge badge-success" id="dash-ram-health-badge">🟢 Ultraligero</span>
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-free-ram-gc" style="padding: 2px 8px; font-size: 11px; border: 1px solid rgba(192, 132, 252, 0.4); color: #c084fc;" title="Forzar recolección de basura y devolver memoria física al sistema operativo">
+                      <span>🧹 Liberar RAM</span>
+                    </button>
+                    <span class="badge badge-success" id="dash-ram-health-badge">🟢 Ultraligero</span>
+                  </div>
                 </div>
 
                 <div style="background: rgba(0, 0, 0, 0.4); height: 10px; border-radius: 5px; overflow: hidden; margin-bottom: 14px;">

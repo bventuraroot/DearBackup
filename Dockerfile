@@ -57,4 +57,4 @@ EXPOSE 3000
 
 VOLUME ["/app/data", "/app/backups"]
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "--expose-gc", "dist/index.js"]
