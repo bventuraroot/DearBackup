@@ -335,6 +335,54 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
+      // Métricas de Memoria RAM & Salud del Docker
+      if (stats.system) {
+        const sys = stats.system;
+        const elRamUsed = document.getElementById('dash-ram-used-mb');
+        const elRamFree = document.getElementById('dash-ram-free-host');
+        const elUptime = document.getElementById('dash-system-uptime');
+        const elProgress = document.getElementById('dash-ram-progress-bar');
+        const elBadge = document.getElementById('dash-ram-health-badge');
+
+        if (elRamUsed) elRamUsed.textContent = `${sys.processRssMB} MB`;
+        if (elRamFree) {
+          const freeGB = (sys.systemFreeMemMB / 1024).toFixed(1);
+          elRamFree.textContent = Number(freeGB) > 1 ? `${freeGB} GB` : `${sys.systemFreeMemMB} MB`;
+        }
+
+        if (elUptime) {
+          const sec = sys.uptimeSeconds || 0;
+          const hours = Math.floor(sec / 3600);
+          const mins = Math.floor((sec % 3600) / 60);
+          if (hours > 24) {
+            const days = Math.floor(hours / 24);
+            elUptime.textContent = `${days}d ${hours % 24}h`;
+          } else if (hours > 0) {
+            elUptime.textContent = `${hours}h ${mins}m`;
+          } else {
+            elUptime.textContent = `${mins} min`;
+          }
+        }
+
+        if (elProgress) {
+          const ramPct = Math.max(3, Math.min(100, Math.round((sys.processRssMB / 512) * 100)));
+          elProgress.style.width = `${ramPct}%`;
+        }
+
+        if (elBadge) {
+          if (sys.processRssMB < 120) {
+            elBadge.textContent = '🟢 Ultraligero';
+            elBadge.className = 'badge badge-success';
+          } else if (sys.processRssMB < 300) {
+            elBadge.textContent = '🟡 Normal';
+            elBadge.className = 'badge badge-warning';
+          } else {
+            elBadge.textContent = '🔴 Alto';
+            elBadge.className = 'badge badge-danger';
+          }
+        }
+      }
+
       const tbody = document.getElementById('dashboard-recent-tbody');
       if (stats.recentLogs.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-muted">Aún no se han ejecutado respaldos. ¡Configura tu primer cliente!</td></tr>';

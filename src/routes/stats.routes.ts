@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { db } from '../db/database';
 import { requireAuth, AuthRequest } from './auth.routes';
 import { CloudService } from '../services/cloud.service';
@@ -48,7 +49,17 @@ router.get('/dashboard', requireAuth, (req: AuthRequest, res: Response) => {
   const cloudRemainingBytes = Math.max(0, cloudMaxStorageBytes - cloudUsedBytes);
   const cloudUsagePercent = cloudMaxStorageBytes > 0 ? Math.min(100, Math.round((cloudUsedBytes / cloudMaxStorageBytes) * 100)) : 0;
 
-  // 5. Últimos 10 respaldos con nombres resueltos
+  // 5. Consumo de Memoria RAM y Recursos del Contenedor Docker / Sistema
+  const memUsage = process.memoryUsage();
+  const processRssMB = (memUsage.rss / (1024 * 1024)).toFixed(1);
+  const processHeapUsedMB = (memUsage.heapUsed / (1024 * 1024)).toFixed(1);
+  const systemTotalMemMB = (os.totalmem() / (1024 * 1024)).toFixed(0);
+  const systemFreeMemMB = (os.freemem() / (1024 * 1024)).toFixed(0);
+  const systemUsedMemMB = ((os.totalmem() - os.freemem()) / (1024 * 1024)).toFixed(0);
+  const systemMemUsagePercent = Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100);
+  const uptimeSeconds = Math.floor(process.uptime());
+
+  // 6. Últimos 10 respaldos con nombres resueltos
   const recentLogs = db.prepare(`
     SELECT 
       b.id, b.client_id, COALESCE(c.name, b.client_name, 'Cliente') as client_name,
@@ -59,7 +70,7 @@ router.get('/dashboard', requireAuth, (req: AuthRequest, res: Response) => {
     LIMIT 10
   `).all();
 
-  // 6. Estadísticas de los últimos 7 días
+  // 7. Estadísticas de los últimos 7 días
   const sevenDaysStats = db.prepare(`
     SELECT 
       strftime('%Y-%m-%d', start_time) as date,
@@ -84,6 +95,17 @@ router.get('/dashboard', requireAuth, (req: AuthRequest, res: Response) => {
       failed: failedBackups,
       running: runningBackups,
       successRate
+    },
+    system: {
+      processRssMB: Number(processRssMB),
+      processHeapUsedMB: Number(processHeapUsedMB),
+      systemTotalMemMB: Number(systemTotalMemMB),
+      systemFreeMemMB: Number(systemFreeMemMB),
+      systemUsedMemMB: Number(systemUsedMemMB),
+      systemMemUsagePercent,
+      uptimeSeconds,
+      nodeVersion: process.version,
+      platform: `${os.platform()} (${os.arch()})`
     },
     storage: {
       totalBytes: localBackupsBytes,

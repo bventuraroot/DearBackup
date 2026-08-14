@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
 const database_1 = require("../db/database");
 const auth_routes_1 = require("./auth.routes");
 const cloud_service_1 = require("../services/cloud.service");
@@ -46,7 +47,16 @@ router.get('/dashboard', auth_routes_1.requireAuth, (req, res) => {
     const cloudUsedBytes = database_1.db.prepare("SELECT SUM(file_size_bytes) as total FROM backup_logs WHERE status = 'success' AND is_replicated_cloud = 1").get().total || 0;
     const cloudRemainingBytes = Math.max(0, cloudMaxStorageBytes - cloudUsedBytes);
     const cloudUsagePercent = cloudMaxStorageBytes > 0 ? Math.min(100, Math.round((cloudUsedBytes / cloudMaxStorageBytes) * 100)) : 0;
-    // 5. Últimos 10 respaldos con nombres resueltos
+    // 5. Consumo de Memoria RAM y Recursos del Contenedor Docker / Sistema
+    const memUsage = process.memoryUsage();
+    const processRssMB = (memUsage.rss / (1024 * 1024)).toFixed(1);
+    const processHeapUsedMB = (memUsage.heapUsed / (1024 * 1024)).toFixed(1);
+    const systemTotalMemMB = (os_1.default.totalmem() / (1024 * 1024)).toFixed(0);
+    const systemFreeMemMB = (os_1.default.freemem() / (1024 * 1024)).toFixed(0);
+    const systemUsedMemMB = ((os_1.default.totalmem() - os_1.default.freemem()) / (1024 * 1024)).toFixed(0);
+    const systemMemUsagePercent = Math.round(((os_1.default.totalmem() - os_1.default.freemem()) / os_1.default.totalmem()) * 100);
+    const uptimeSeconds = Math.floor(process.uptime());
+    // 6. Últimos 10 respaldos con nombres resueltos
     const recentLogs = database_1.db.prepare(`
     SELECT 
       b.id, b.client_id, COALESCE(c.name, b.client_name, 'Cliente') as client_name,
@@ -56,7 +66,7 @@ router.get('/dashboard', auth_routes_1.requireAuth, (req, res) => {
     ORDER BY b.start_time DESC
     LIMIT 10
   `).all();
-    // 6. Estadísticas de los últimos 7 días
+    // 7. Estadísticas de los últimos 7 días
     const sevenDaysStats = database_1.db.prepare(`
     SELECT 
       strftime('%Y-%m-%d', start_time) as date,
@@ -79,6 +89,17 @@ router.get('/dashboard', auth_routes_1.requireAuth, (req, res) => {
             failed: failedBackups,
             running: runningBackups,
             successRate
+        },
+        system: {
+            processRssMB: Number(processRssMB),
+            processHeapUsedMB: Number(processHeapUsedMB),
+            systemTotalMemMB: Number(systemTotalMemMB),
+            systemFreeMemMB: Number(systemFreeMemMB),
+            systemUsedMemMB: Number(systemUsedMemMB),
+            systemMemUsagePercent,
+            uptimeSeconds,
+            nodeVersion: process.version,
+            platform: `${os_1.default.platform()} (${os_1.default.arch()})`
         },
         storage: {
             totalBytes: localBackupsBytes,
