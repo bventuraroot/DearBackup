@@ -64,7 +64,7 @@ export class BackupService {
     // Persistir log en tiempo real en la base de datos para visualización inmediata
     try {
       db.prepare('UPDATE backup_logs SET log_output = ? WHERE id = ?').run(logAccumulator.text, backupId);
-    } catch {}
+    } catch { }
 
     const listeners = this.logListeners.get(backupId);
     if (listeners) {
@@ -140,7 +140,7 @@ export class BackupService {
       // Si requiere SSH (para Túnel de BD, Contenedor Docker o DTEs)
       if (connMode !== 'direct_tcp' || hasDtes) {
         this.emitLog(backupId, `📡 Conectando por SSH a ${client.ssh_user}@${client.ssh_host}:${client.ssh_port}...`, logAccumulator);
-        
+
         const sshConfig: SSHClientConfig = {
           host: client.ssh_host,
           port: client.ssh_port,
@@ -154,7 +154,7 @@ export class BackupService {
         const conn = new SSHClient();
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => {
-            try { conn.end(); } catch {}
+            try { conn.end(); } catch { }
             reject(new Error(`Tiempo de espera agotado conectando por SSH a ${client.ssh_host}:${client.ssh_port} (45s)`));
           }, 45000);
 
@@ -270,7 +270,7 @@ export class BackupService {
       this.emitLog(backupId, `📦 Creando paquete consolidado del respaldo...`, logAccumulator);
       const timestampStr = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
       const safeClientName = client.name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
-      
+
       const unencryptedTarPath = path.join(clientBackupDir, `${safeClientName}_${timestampStr}.tar.gz`);
       execSync(`tar -czf "${unencryptedTarPath}" -C "${tempDir}" .`, { stdio: 'pipe' });
 
@@ -284,7 +284,7 @@ export class BackupService {
       try {
         fs.unlinkSync(unencryptedTarPath);
         fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch (e) {}
+      } catch (e) { }
 
       // 7. Calcular Checksum SHA-256 & Métricas
       const finalStats = fs.statSync(finalEncryptedFile);
@@ -375,7 +375,7 @@ export class BackupService {
       // Limpiar temporales en fallo
       try {
         fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch (e) {}
+      } catch (e) { }
 
       db.prepare(`
         UPDATE backup_logs SET

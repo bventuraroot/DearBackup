@@ -342,7 +342,7 @@ export class SSHService {
 
       conn.on('ready', () => {
         onLog?.('info', `Conexión SSH establecida con ${config.host}:${config.port}`);
-        
+
         conn.exec(command, (err, stream) => {
           if (err) {
             conn.end();
