@@ -9,6 +9,7 @@ export class RetentionService {
   public static async applyRetentionForClient(clientId: string, retentionDays: number, retentionCount: number): Promise<{ prunedLocal: number; prunedCloud: number }> {
     let prunedLocal = 0;
     let prunedCloud = 0;
+    const maxCopies = Number(retentionCount) > 0 ? Number(retentionCount) : 2;
 
     try {
       // 1. Obtener todos los backups exitosos ordenados del más reciente al más antiguo
@@ -28,23 +29,12 @@ export class RetentionService {
         file_size_bytes: number;
       }>;
 
-      if (logs.length <= retentionCount) {
-        return { prunedLocal, prunedCloud };
-      }
+      // Si hay más copias en BD que el límite
+      if (logs.length > maxCopies) {
+        const logsToPrune = logs.slice(maxCopies);
 
-      // Los logs que sobrepasan la cantidad máxima de copias permitidas
-      const logsToPrune = logs.slice(retentionCount);
-
-      // Fecha límite para retención por días
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - (retentionDays || 30));
-
-      for (const log of logsToPrune) {
-        const logDate = new Date(log.start_time);
-        const shouldPrune = logDate < cutoffDate || logs.length > retentionCount;
-
-        if (shouldPrune) {
-          // A. Eliminar archivo físico local si existe
+        for (const log of logsToPrune) {
+          // A. Eliminar archivo local
           if (log.file_path && fs.existsSync(log.file_path)) {
             try {
               fs.unlinkSync(log.file_path);
@@ -54,9 +44,9 @@ export class RetentionService {
             }
           }
 
-          // B. Eliminar archivo en la nube (R2 / S3) si fue replicado
+          // B. Eliminar archivo en la nube
           const remoteKey = log.cloud_path || (log.file_name ? `${log.client_id}/${log.file_name}` : null);
-          if ((log.is_replicated_cloud || log.cloud_path) && remoteKey) {
+          if (remoteKey) {
             try {
               await CloudService.deleteFile(remoteKey);
               prunedCloud++;
@@ -65,7 +55,7 @@ export class RetentionService {
             }
           }
 
-          // C. Actualizar registro en la base de datos
+          // C. Actualizar registro en BD
           db.prepare(`
             UPDATE backup_logs 
             SET file_path = NULL,
@@ -78,10 +68,25 @@ export class RetentionService {
         }
       }
 
-      // 2. Aplicar cuota global de la nube si está configurada
-      const cloudConfig = CloudService.getConfig();
-      if (cloudConfig && cloudConfig.isEnabled && cloudConfig.maxStorageGB && cloudConfig.maxStorageGB > 0) {
-        await this.applyGlobalCloudQuota(cloudConfig.maxStorageGB);
+      // 2. Escanear directamente el Bucket Cloud para ese cliente para asegurar que no haya archivos huérfanos
+      const cloudObjects = await CloudService.listObjects(`${clientId}/`);
+      if (cloudObjects.length > maxCopies) {
+        // Ordenar del más nuevo al más viejo
+        cloudObjects.sort((a, b) => {
+          const dateA = a.lastModified ? a.lastModified.getTime() : 0;
+          const dateB = b.lastModified ? b.lastModified.getTime() : 0;
+          return dateB - dateA;
+        });
+
+        const extraCloudObjects = cloudObjects.slice(maxCopies);
+        for (const obj of extraCloudObjects) {
+          try {
+            await CloudService.deleteFile(obj.key);
+            prunedCloud++;
+          } catch (e: any) {
+            console.error(`Error purgando objeto huérfano en cloud ${obj.key}:`, e.message);
+          }
+        }
       }
 
     } catch (err: any) {
@@ -99,47 +104,37 @@ export class RetentionService {
     try {
       const maxBytes = maxStorageGB * 1024 * 1024 * 1024;
       
-      const cloudLogs = db.prepare(`
-        SELECT id, client_id, file_name, cloud_path, file_size_bytes, start_time
-        FROM backup_logs
-        WHERE is_replicated_cloud = 1 AND status = 'success'
-        ORDER BY start_time ASC
-      `).all() as Array<{
-        id: string;
-        client_id: string;
-        file_name: string;
-        cloud_path: string | null;
-        file_size_bytes: number;
-        start_time: string;
-      }>;
-
-      let currentTotalBytes = cloudLogs.reduce((acc, l) => acc + (Number(l.file_size_bytes) || 0), 0);
+      const allCloudObjects = await CloudService.listObjects();
+      let currentTotalBytes = allCloudObjects.reduce((acc, o) => acc + o.size, 0);
 
       if (currentTotalBytes <= maxBytes) {
         return deletedCount;
       }
 
-      for (const log of cloudLogs) {
+      // Ordenar del más viejo al más nuevo para borrar los más antiguos primero
+      allCloudObjects.sort((a, b) => {
+        const dateA = a.lastModified ? a.lastModified.getTime() : 0;
+        const dateB = b.lastModified ? b.lastModified.getTime() : 0;
+        return dateA - dateB;
+      });
+
+      for (const obj of allCloudObjects) {
         if (currentTotalBytes <= maxBytes) break;
 
-        const remoteKey = log.cloud_path || (log.file_name ? `${log.client_id}/${log.file_name}` : null);
-        if (remoteKey) {
-          try {
-            await CloudService.deleteFile(remoteKey);
-            deletedCount++;
-          } catch (e: any) {
-            console.error(`Error eliminando archivo por cuota cloud ${remoteKey}:`, e.message);
-          }
+        try {
+          await CloudService.deleteFile(obj.key);
+          deletedCount++;
+          currentTotalBytes -= obj.size;
+
+          db.prepare(`
+            UPDATE backup_logs 
+            SET cloud_path = NULL,
+                is_replicated_cloud = 0
+            WHERE cloud_path = ? OR file_name = ?
+          `).run(obj.key, obj.key.split('/')[1] || obj.key);
+        } catch (e: any) {
+          console.error(`Error eliminando archivo por cuota cloud ${obj.key}:`, e.message);
         }
-
-        currentTotalBytes -= (Number(log.file_size_bytes) || 0);
-
-        db.prepare(`
-          UPDATE backup_logs 
-          SET cloud_path = NULL,
-              is_replicated_cloud = 0
-          WHERE id = ?
-        `).run(log.id);
       }
     } catch (err: any) {
       console.error('Error aplicando cuota global de la nube:', err.message);
@@ -155,13 +150,47 @@ export class RetentionService {
     let totalCloudDeleted = 0;
     let freedBytes = 0;
 
+    // 1. Purgar por cada cliente registrado en la BD
     const clients = db.prepare('SELECT id, retention_days, retention_count FROM clients').all() as any[];
 
     for (const c of clients) {
-      const res = await this.applyRetentionForClient(c.id, c.retention_days || 30, c.retention_count || 2);
+      const limit = Number(c.retention_count) > 0 ? Number(c.retention_count) : 2;
+      const res = await this.applyRetentionForClient(c.id, c.retention_days || 30, limit);
       totalCloudDeleted += res.prunedCloud;
     }
 
+    // 2. Escanear todo el bucket para limpiar clientes eliminados o archivos fuera de retención
+    const allCloudObjects = await CloudService.listObjects();
+    const clientMap = new Map<string, number>();
+    for (const c of clients) {
+      clientMap.set(c.id, Number(c.retention_count) > 0 ? Number(c.retention_count) : 2);
+    }
+
+    // Agrupar por prefijo (carpeta del cliente)
+    const grouped = new Map<string, Array<{ key: string; size: number; lastModified?: Date }>>();
+    for (const obj of allCloudObjects) {
+      const parts = obj.key.split('/');
+      const clientId = parts[0];
+      if (!grouped.has(clientId)) grouped.set(clientId, []);
+      grouped.get(clientId)!.push(obj);
+    }
+
+    for (const [clientId, objects] of grouped.entries()) {
+      const allowedCount = clientMap.get(clientId) || 2; // Si no existe el cliente, retener máx 2
+      if (objects.length > allowedCount) {
+        objects.sort((a, b) => (b.lastModified?.getTime() || 0) - (a.lastModified?.getTime() || 0));
+        const toDelete = objects.slice(allowedCount);
+        for (const obj of toDelete) {
+          try {
+            await CloudService.deleteFile(obj.key);
+            totalCloudDeleted++;
+            freedBytes += obj.size;
+          } catch {}
+        }
+      }
+    }
+
+    // 3. Aplicar cuota global de la nube si está configurada
     const cloudConfig = CloudService.getConfig();
     if (cloudConfig && cloudConfig.maxStorageGB && cloudConfig.maxStorageGB > 0) {
       const extraDeleted = await this.applyGlobalCloudQuota(cloudConfig.maxStorageGB);

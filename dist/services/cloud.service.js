@@ -133,5 +133,32 @@ class CloudService {
             return null;
         }
     }
+    /**
+     * Lista los objetos existentes en el bucket (opcionalmente filtrados por prefijo)
+     */
+    static async listObjects(prefix) {
+        const config = this.getConfig();
+        if (!config || !config.isEnabled)
+            return [];
+        try {
+            const client = this.getS3Client(config);
+            const command = new client_s3_1.ListObjectsV2Command({
+                Bucket: config.bucket,
+                Prefix: prefix
+            });
+            const res = await client.send(command);
+            if (!res.Contents)
+                return [];
+            return res.Contents.map(o => ({
+                key: o.Key || '',
+                size: o.Size || 0,
+                lastModified: o.LastModified
+            }));
+        }
+        catch (err) {
+            console.error('Error listando objetos en S3/R2:', err.message);
+            return [];
+        }
+    }
 }
 exports.CloudService = CloudService;

@@ -1600,8 +1600,8 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const res = await API.post('/backups/purge-cloud', {});
         showToast(res.message, 'success');
-        loadBackups();
-        loadDashboardMetrics();
+        loadBackupsHistory();
+        loadDashboard();
       } catch (err) {
         showToast(err.message, 'error');
       } finally {
