@@ -460,6 +460,45 @@ router.delete('/logs/:id', auth_routes_1.requireAuth, (req, res) => {
     res.json({ success: true, message: 'Registro y archivo eliminados correctamente.' });
 });
 /**
+ * Vaciar / Limpiar todo el historial de respaldos y logs
+ */
+router.post('/clear-logs', auth_routes_1.requireAuth, (req, res) => {
+    try {
+        const totalDeleted = database_1.db.prepare('SELECT COUNT(*) as count FROM backup_logs').get()?.count || 0;
+        try {
+            database_1.db.prepare('DELETE FROM share_links').run();
+        }
+        catch (_) { }
+        database_1.db.prepare('DELETE FROM backup_logs').run();
+        res.json({
+            success: true,
+            deletedCount: totalDeleted,
+            message: `¡Historial vaciado con éxito! Se eliminaron ${totalDeleted} registros. La vista está lista para registrar nuevas ejecuciones.`
+        });
+    }
+    catch (err) {
+        res.status(500).json({ error: `Error vaciando historial: ${err.message}` });
+    }
+});
+router.delete('/logs', auth_routes_1.requireAuth, (req, res) => {
+    try {
+        const totalDeleted = database_1.db.prepare('SELECT COUNT(*) as count FROM backup_logs').get()?.count || 0;
+        try {
+            database_1.db.prepare('DELETE FROM share_links').run();
+        }
+        catch (_) { }
+        database_1.db.prepare('DELETE FROM backup_logs').run();
+        res.json({
+            success: true,
+            deletedCount: totalDeleted,
+            message: `¡Historial vaciado con éxito! Se eliminaron ${totalDeleted} registros.`
+        });
+    }
+    catch (err) {
+        res.status(500).json({ error: `Error vaciando historial: ${err.message}` });
+    }
+});
+/**
  * Forzar purga y aplicación estricta de retención de respaldos en la nube (R2 / S3)
  */
 router.post('/purge-cloud', auth_routes_1.requireAuth, async (req, res) => {

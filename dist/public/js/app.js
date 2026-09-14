@@ -1393,7 +1393,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const url = `/backups/logs?${clientId ? `clientId=${clientId}&` : ''}${status ? `status=${status}&` : ''}limit=100`;
       const logs = await API.get(url);
 
-      if (logs.length === 0) {
+      if (!Array.isArray(logs) || logs.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="text-center py-6 text-muted">No se encontraron registros de respaldo.</td></tr>';
         return;
       }
@@ -1401,16 +1401,25 @@ document.addEventListener('DOMContentLoaded', () => {
       tbody.innerHTML = logs.map(log => {
         const statusClass = log.status === 'success' ? 'success' : log.status === 'failed' ? 'failed' : 'running';
         const statusText = log.status === 'success' ? 'Exitoso' : log.status === 'failed' ? 'Fallido' : 'En proceso';
-        const dateFormatted = new Date(log.start_time).toLocaleString();
-        const sizeMB = (log.file_size_bytes / (1024 * 1024)).toFixed(2);
+        let dateFormatted = '—';
+        if (log.start_time) {
+          try {
+            dateFormatted = new Date(log.start_time).toLocaleString();
+          } catch (_) {
+            dateFormatted = String(log.start_time);
+          }
+        }
+        const sizeMB = log.file_size_bytes ? (Number(log.file_size_bytes) / (1024 * 1024)).toFixed(2) : '0.00';
         const checksumShort = log.checksum_sha256 ? `${log.checksum_sha256.substring(0, 10)}...` : '-';
+        const clientName = log.client_name || 'Cliente';
+        const duration = log.duration_seconds !== undefined ? log.duration_seconds : 0;
 
         return `
           <tr>
             <td><span class="status-pill ${statusClass}">${statusText}</span></td>
-            <td><strong>${log.client_name}</strong></td>
+            <td><strong>${clientName}</strong></td>
             <td>${dateFormatted}</td>
-            <td>${log.duration_seconds}s</td>
+            <td>${duration}s</td>
             <td>${log.status === 'success' ? `${sizeMB} MB` : '-'}</td>
             <td><code title="${log.checksum_sha256 || ''}">${checksumShort}</code></td>
             <td>${log.is_replicated_cloud ? '☁️ S3' : '—'}</td>
@@ -1455,13 +1464,49 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
     } catch (err) {
-      showToast('Error cargando historial de respaldos', 'error');
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="8" class="text-center py-6 text-red">
+            <p>Error cargando historial de respaldos (${err.message || 'error de conexión'}).</p>
+            <button class="btn btn-sm btn-outline mt-2" id="btn-retry-history">🔄 Reintentar</button>
+          </td>
+        </tr>
+      `;
+      document.getElementById('btn-retry-history')?.addEventListener('click', loadBackupsHistory);
+      showToast('Error cargando historial de respaldos: ' + (err.message || ''), 'error');
     }
   }
+
+  window.__dearbackup_loadHistory = loadBackupsHistory;
 
   document.getElementById('filter-backup-client').addEventListener('change', loadBackupsHistory);
   document.getElementById('filter-backup-status').addEventListener('change', loadBackupsHistory);
   document.getElementById('refresh-backups-btn').addEventListener('click', loadBackupsHistory);
+
+  // Vaciar todo el historial de respaldos y logs
+  const btnClearHistory = document.getElementById('btn-clear-backups-history');
+  if (btnClearHistory) {
+    btnClearHistory.addEventListener('click', async () => {
+      const confirmed = confirm('⚠️ ¿Estás seguro de que deseas vaciar todo el historial de respaldos y registros?\n\nEsta acción borrará los registros de logs antiguos para que puedas visualizar las nuevas ejecuciones limpiamente. Tus clientes, llaves y configuraciones NO se verán afectados.');
+      if (!confirmed) return;
+
+      const originalText = btnClearHistory.innerHTML;
+      btnClearHistory.disabled = true;
+      btnClearHistory.innerHTML = '<span>⏳ Vaciando historial...</span>';
+
+      try {
+        const res = await API.post('/backups/clear-logs', {});
+        showToast(res.message || 'Historial vaciado correctamente', 'success');
+        loadBackupsHistory();
+        loadDashboard();
+      } catch (err) {
+        showToast(`Error al vaciar historial: ${err.message}`, 'error');
+      } finally {
+        btnClearHistory.disabled = false;
+        btnClearHistory.innerHTML = originalText;
+      }
+    });
+  }
 
   async function viewLogDetails(logId) {
     try {
