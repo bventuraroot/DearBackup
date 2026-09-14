@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { db } from '../db/database';
+import { db, replaceDatabaseFile } from '../db/database';
 import { VaultService } from '../services/vault.service';
 import { PasskeyService } from '../services/passkey.service';
 import { ConfigBackupService } from '../services/config-backup.service';
@@ -100,7 +100,7 @@ router.post('/setup', async (req: Request, res: Response) => {
 });
 
 /**
- * Setup Wizard: Importar configuración durante la instalación inicial
+ * Setup Wizard: Importar configuración (.dearconfig) durante la instalación inicial
  */
 router.post('/import-setup', async (req: Request, res: Response) => {
   const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any).count;
@@ -150,6 +150,85 @@ router.post('/import-setup', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(400).json({ error: `Error importando configuración: ${err.message}` });
+  }
+});
+
+/**
+ * Setup Wizard: Restaurar copia física de base de datos (.db / .sqlite / .tar.gz) durante instalación
+ */
+router.post('/restore-database-setup', async (req: Request, res: Response) => {
+  try {
+    const { dbBase64, newAdminPassword, vaultPassphrase, confirmOverwrite } = req.body;
+
+    if (!dbBase64) {
+      return res.status(400).json({ error: 'No se envió ningún archivo de base de datos.' });
+    }
+
+    const currentUsers = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any).count;
+    if (currentUsers > 0 && !confirmOverwrite) {
+      return res.status(400).json({ 
+        error: 'El sistema ya contiene datos. Para sobreescribir la base de datos existente, confirma la acción.',
+        requireConfirmation: true 
+      });
+    }
+
+    const buffer = Buffer.from(dbBase64, 'base64');
+    const result = replaceDatabaseFile(buffer);
+
+    // 1. Manejo del Vault
+    let vaultUnlocked = false;
+    if (vaultPassphrase) {
+      vaultUnlocked = VaultService.initializeMasterKey(vaultPassphrase, true);
+    } else {
+      vaultUnlocked = VaultService.tryAutoUnlock();
+    }
+
+    // 2. Manejo de Usuarios
+    let targetUser: any = null;
+    if (result.users.length > 0) {
+      targetUser = result.users.find(u => u.role === 'admin') || result.users[0];
+      
+      // Si se proporcionó una nueva contraseña, actualizarla inmediatamente
+      if (newAdminPassword && newAdminPassword.length >= 8) {
+        const passwordHash = await bcrypt.hash(newAdminPassword, 10);
+        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, targetUser.id);
+      }
+    } else {
+      // Si el archivo no tenía usuarios, crear uno nuevo
+      const userId = crypto.randomUUID();
+      const pwd = newAdminPassword && newAdminPassword.length >= 8 ? newAdminPassword : 'AdminPassword2026!';
+      const passwordHash = await bcrypt.hash(pwd, 10);
+      db.prepare(`
+        INSERT INTO users (id, username, password_hash, role)
+        VALUES (?, 'admin', ?, 'admin')
+      `).run(userId, passwordHash);
+      targetUser = { id: userId, username: 'admin', role: 'admin' };
+    }
+
+    // 3. Inicializar llave SSH si no existiera
+    try {
+      VaultService.getOrCreateSystemSSHKey();
+    } catch (_) {}
+
+    // 4. Firmar token JWT para ingreso directo
+    const token = jwt.sign(
+      { id: targetUser.id, username: targetUser.username, role: targetUser.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      success: true,
+      message: `¡Base de datos restaurada con éxito! Se cargaron ${result.clientCount} clientes y ${result.userCount} usuarios.`,
+      token,
+      user: { id: targetUser.id, username: targetUser.username, role: targetUser.role },
+      allUsers: result.users.map(u => ({ username: u.username, role: u.role })),
+      vaultUnlocked,
+      clientCount: result.clientCount,
+      userCount: result.userCount
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: `Error al restaurar base de datos: ${err.message}` });
   }
 });
 

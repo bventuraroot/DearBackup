@@ -4,19 +4,193 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.db = void 0;
+exports.closeDatabase = closeDatabase;
+exports.reopenDatabase = reopenDatabase;
+exports.replaceDatabaseFile = replaceDatabaseFile;
 exports.initDatabase = initDatabase;
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+const child_process_1 = require("child_process");
 const DB_DIR = process.env.DATA_DIR || path_1.default.join(process.cwd(), 'data');
 if (!fs_1.default.existsSync(DB_DIR)) {
     fs_1.default.mkdirSync(DB_DIR, { recursive: true });
 }
 const DB_PATH = path_1.default.join(DB_DIR, 'dearbackup.db');
-exports.db = new better_sqlite3_1.default(DB_PATH);
-// Habilitar Foreign Keys y modo WAL para máxima concurrencia y velocidad
-exports.db.pragma('journal_mode = WAL');
-exports.db.pragma('foreign_keys = ON');
+let _db = new better_sqlite3_1.default(DB_PATH);
+_db.pragma('journal_mode = WAL');
+_db.pragma('foreign_keys = ON');
+exports.db = new Proxy({}, {
+    get(_target, prop) {
+        const val = _db[prop];
+        if (typeof val === 'function') {
+            return val.bind(_db);
+        }
+        return val;
+    }
+});
+function closeDatabase() {
+    try {
+        _db.pragma('wal_checkpoint(TRUNCATE)');
+    }
+    catch (_) { }
+    try {
+        _db.close();
+    }
+    catch (_) { }
+}
+function reopenDatabase() {
+    try {
+        _db.close();
+    }
+    catch (_) { }
+    _db = new better_sqlite3_1.default(DB_PATH);
+    _db.pragma('journal_mode = WAL');
+    _db.pragma('foreign_keys = ON');
+}
+/**
+ * Reemplaza de forma atómica y segura el archivo dearbackup.db cerrando
+ * previamente la conexión para evitar errores EBUSY en Windows 11.
+ */
+function replaceDatabaseFile(buffer) {
+    let dbBuffer = buffer;
+    let restoredVaultKey = false;
+    // Si es un archivo .tar.gz (GZIP)
+    if (buffer.length > 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+        const tempExtractDir = path_1.default.join(DB_DIR, `temp_extract_${Date.now()}`);
+        fs_1.default.mkdirSync(tempExtractDir, { recursive: true });
+        const tempTarPath = path_1.default.join(tempExtractDir, 'archive.tar.gz');
+        fs_1.default.writeFileSync(tempTarPath, buffer);
+        try {
+            (0, child_process_1.execSync)(`tar -xzf "${tempTarPath}" -C "${tempExtractDir}"`, { stdio: 'ignore' });
+            // Buscar dearbackup.db
+            const candidatePaths = [
+                path_1.default.join(tempExtractDir, 'data', 'dearbackup.db'),
+                path_1.default.join(tempExtractDir, 'dearbackup.db'),
+            ];
+            let foundDbPath = candidatePaths.find(p => fs_1.default.existsSync(p));
+            if (!foundDbPath) {
+                const findDbRecursive = (dir) => {
+                    const entries = fs_1.default.readdirSync(dir, { withFileTypes: true });
+                    for (const entry of entries) {
+                        const full = path_1.default.join(dir, entry.name);
+                        if (entry.isDirectory()) {
+                            const res = findDbRecursive(full);
+                            if (res)
+                                return res;
+                        }
+                        else if (entry.isFile() && (entry.name.endsWith('.db') || entry.name.endsWith('.sqlite'))) {
+                            return full;
+                        }
+                    }
+                    return null;
+                };
+                foundDbPath = findDbRecursive(tempExtractDir) || undefined;
+            }
+            if (!foundDbPath) {
+                throw new Error('El archivo .tar.gz no contiene una base de datos válida (dearbackup.db).');
+            }
+            dbBuffer = fs_1.default.readFileSync(foundDbPath);
+            // Si el tar contiene .vault_key, restaurarlo también
+            const candidateVaultKeys = [
+                path_1.default.join(tempExtractDir, 'data', '.vault_key'),
+                path_1.default.join(tempExtractDir, '.vault_key')
+            ];
+            const foundVaultKey = candidateVaultKeys.find(p => fs_1.default.existsSync(p));
+            if (foundVaultKey) {
+                fs_1.default.copyFileSync(foundVaultKey, path_1.default.join(DB_DIR, '.vault_key'));
+                restoredVaultKey = true;
+            }
+        }
+        finally {
+            try {
+                fs_1.default.rmSync(tempExtractDir, { recursive: true, force: true });
+            }
+            catch (_) { }
+        }
+    }
+    // Validar cabecera SQLite
+    if (dbBuffer.length < 100 || dbBuffer.subarray(0, 15).toString() !== 'SQLite format 3') {
+        throw new Error('El archivo no es una base de datos SQLite válida (cabecera no coincide).');
+    }
+    // Escribir archivo temporal para validar integridad y estructura
+    const tempValidate = path_1.default.join(DB_DIR, `validate_temp_${Date.now()}.db`);
+    fs_1.default.writeFileSync(tempValidate, dbBuffer);
+    let userCount = 0;
+    let clientCount = 0;
+    let users = [];
+    try {
+        const testDb = new better_sqlite3_1.default(tempValidate, { readonly: true });
+        try {
+            users = testDb.prepare('SELECT id, username, role FROM users').all();
+            userCount = users.length;
+        }
+        catch (_) {
+            users = [];
+            userCount = 0;
+        }
+        try {
+            clientCount = testDb.prepare('SELECT count(*) as count FROM clients').get()?.count ?? 0;
+        }
+        catch (_) {
+            clientCount = 0;
+        }
+        testDb.close();
+    }
+    catch (testErr) {
+        try {
+            fs_1.default.unlinkSync(tempValidate);
+        }
+        catch (_) { }
+        throw new Error(`La base de datos está dañada o no es compatible: ${testErr.message}`);
+    }
+    // 1. Checkpoint y cerrar conexión actual para liberar locks de Windows (EBUSY)
+    closeDatabase();
+    // 2. Crear respaldo previo de seguridad
+    const preRestoreBak = path_1.default.join(DB_DIR, `dearbackup_backup_pre_restore_${Date.now()}.db.bak`);
+    if (fs_1.default.existsSync(DB_PATH)) {
+        try {
+            fs_1.default.copyFileSync(DB_PATH, preRestoreBak);
+        }
+        catch (_) { }
+    }
+    // 3. Eliminar WAL y SHM antiguos
+    const walPath = `${DB_PATH}-wal`;
+    const shmPath = `${DB_PATH}-shm`;
+    try {
+        if (fs_1.default.existsSync(walPath))
+            fs_1.default.unlinkSync(walPath);
+    }
+    catch (_) { }
+    try {
+        if (fs_1.default.existsSync(shmPath))
+            fs_1.default.unlinkSync(shmPath);
+    }
+    catch (_) { }
+    // 4. Copiar nueva base de datos hacia DB_PATH
+    try {
+        fs_1.default.copyFileSync(tempValidate, DB_PATH);
+        try {
+            fs_1.default.unlinkSync(tempValidate);
+        }
+        catch (_) { }
+    }
+    catch (copyErr) {
+        if (fs_1.default.existsSync(preRestoreBak)) {
+            try {
+                fs_1.default.copyFileSync(preRestoreBak, DB_PATH);
+            }
+            catch (_) { }
+        }
+        reopenDatabase();
+        throw copyErr;
+    }
+    // 5. Reabrir conexión SQLite limpia
+    reopenDatabase();
+    // 6. Aplicar posibles migraciones de esquema
+    initDatabase();
+    return { clientCount, userCount, users, restoredVaultKey };
+}
 function initDatabase() {
     exports.db.exec(`
     -- 1. Tabla de Usuarios y Seguridad

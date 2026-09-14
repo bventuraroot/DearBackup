@@ -2,7 +2,8 @@ import { Router, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import Database from 'better-sqlite3';
-import { db } from '../db/database';
+import bcrypt from 'bcryptjs';
+import { db, replaceDatabaseFile } from '../db/database';
 import { requireAuth, AuthRequest } from './auth.routes';
 import { VaultService } from '../services/vault.service';
 import { NotifyService } from '../services/notify.service';
@@ -383,66 +384,48 @@ router.get('/self-backup-status', requireAuth, (req: AuthRequest, res: Response)
 });
 
 /**
- * Restaurar archivo de base de datos SQLite (.db) subido desde la interfaz web
+ * Restaurar archivo de base de datos SQLite (.db o .tar.gz) subido desde la interfaz web
  */
-router.post('/restore-database', requireAuth, (req: AuthRequest, res: Response) => {
+router.post('/restore-database', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { dbBase64 } = req.body;
+    const { dbBase64, newAdminPassword, vaultPassphrase } = req.body;
     if (!dbBase64) {
       return res.status(400).json({ error: 'No se envió ningún archivo de base de datos.' });
     }
 
     const buffer = Buffer.from(dbBase64, 'base64');
-    if (buffer.length < 100 || buffer.subarray(0, 15).toString() !== 'SQLite format 3') {
-      return res.status(400).json({ error: 'El archivo subido no es una base de datos SQLite válida (cabecera no coincide).' });
+    const result = replaceDatabaseFile(buffer);
+
+    // 1. Manejo de Vault
+    let vaultUnlocked = false;
+    if (vaultPassphrase) {
+      vaultUnlocked = VaultService.initializeMasterKey(vaultPassphrase, true);
+    } else {
+      vaultUnlocked = VaultService.tryAutoUnlock();
     }
 
-    const dbDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
-    const dbPath = path.join(dbDir, 'dearbackup.db');
-    const backupOldPath = path.join(dbDir, `dearbackup-backup-pre-restore-${Date.now()}.db`);
-
-    // 1. Checkpoint actual
-    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) {}
-
-    // 2. Backup de seguridad antes de sobreescribir
-    if (fs.existsSync(dbPath)) {
-      fs.copyFileSync(dbPath, backupOldPath);
+    // 2. Si se solicitó nueva contraseña para el administrador
+    let passwordUpdated = false;
+    let targetUsername = '';
+    if (result.users.length > 0) {
+      const adminUser = result.users.find(u => u.role === 'admin') || result.users[0];
+      targetUsername = adminUser.username;
+      if (newAdminPassword && newAdminPassword.length >= 8) {
+        const newHash = await bcrypt.hash(newAdminPassword, 10);
+        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newHash, adminUser.id);
+        passwordUpdated = true;
+      }
     }
-
-    // 3. Escribir temporalmente y validar tablas
-    const tempRestore = path.join(dbDir, `restore-temp-${Date.now()}.db`);
-    fs.writeFileSync(tempRestore, buffer);
-
-    let clientCount = 0;
-    let userCount = 0;
-    try {
-      const testDb = new Database(tempRestore, { readonly: true });
-      userCount = (testDb.prepare('SELECT count(*) as count FROM users').get() as any)?.count ?? 0;
-      clientCount = (testDb.prepare('SELECT count(*) as count FROM clients').get() as any)?.count ?? 0;
-      testDb.close();
-    } catch (testErr: any) {
-      if (fs.existsSync(tempRestore)) fs.unlinkSync(tempRestore);
-      return res.status(400).json({ error: `La base de datos está dañada o incompatible: ${testErr.message}` });
-    }
-
-    // 4. Limpiar WAL/SHM antiguos
-    const walPath = path.join(dbDir, 'dearbackup.db-wal');
-    const shmPath = path.join(dbDir, 'dearbackup.db-shm');
-    if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
-    if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
-
-    // 5. Sobreescribir archivo principal
-    fs.copyFileSync(tempRestore, dbPath);
-    try { fs.unlinkSync(tempRestore); } catch (_) {}
-
-    // 6. Refrescar WAL
-    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) {}
 
     res.json({
       success: true,
-      message: `¡Base de datos restaurada con éxito! Se cargaron ${clientCount} clientes y ${userCount} usuarios registrados.`,
-      clientCount,
-      userCount
+      message: `¡Base de datos restaurada con éxito! Se cargaron ${result.clientCount} clientes y ${result.userCount} usuarios.`,
+      clientCount: result.clientCount,
+      userCount: result.userCount,
+      users: result.users.map(u => ({ username: u.username, role: u.role })),
+      targetUsername,
+      passwordUpdated,
+      vaultUnlocked
     });
   } catch (err: any) {
     res.status(500).json({ error: `Fallo al restaurar base de datos: ${err.message}` });

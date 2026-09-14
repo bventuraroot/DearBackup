@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
-const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const database_1 = require("../db/database");
 const auth_routes_1 = require("./auth.routes");
 const vault_service_1 = require("../services/vault.service");
@@ -339,75 +339,45 @@ router.get('/self-backup-status', auth_routes_1.requireAuth, (req, res) => {
     }
 });
 /**
- * Restaurar archivo de base de datos SQLite (.db) subido desde la interfaz web
+ * Restaurar archivo de base de datos SQLite (.db o .tar.gz) subido desde la interfaz web
  */
-router.post('/restore-database', auth_routes_1.requireAuth, (req, res) => {
+router.post('/restore-database', auth_routes_1.requireAuth, async (req, res) => {
     try {
-        const { dbBase64 } = req.body;
+        const { dbBase64, newAdminPassword, vaultPassphrase } = req.body;
         if (!dbBase64) {
             return res.status(400).json({ error: 'No se envió ningún archivo de base de datos.' });
         }
         const buffer = Buffer.from(dbBase64, 'base64');
-        if (buffer.length < 100 || buffer.subarray(0, 15).toString() !== 'SQLite format 3') {
-            return res.status(400).json({ error: 'El archivo subido no es una base de datos SQLite válida (cabecera no coincide).' });
+        const result = (0, database_1.replaceDatabaseFile)(buffer);
+        // 1. Manejo de Vault
+        let vaultUnlocked = false;
+        if (vaultPassphrase) {
+            vaultUnlocked = vault_service_1.VaultService.initializeMasterKey(vaultPassphrase, true);
         }
-        const dbDir = process.env.DATA_DIR || path_1.default.join(process.cwd(), 'data');
-        const dbPath = path_1.default.join(dbDir, 'dearbackup.db');
-        const backupOldPath = path_1.default.join(dbDir, `dearbackup-backup-pre-restore-${Date.now()}.db`);
-        // 1. Checkpoint actual
-        try {
-            database_1.db.pragma('wal_checkpoint(TRUNCATE)');
+        else {
+            vaultUnlocked = vault_service_1.VaultService.tryAutoUnlock();
         }
-        catch (_) { }
-        // 2. Backup de seguridad antes de sobreescribir
-        if (fs_1.default.existsSync(dbPath)) {
-            fs_1.default.copyFileSync(dbPath, backupOldPath);
-        }
-        // 3. Escribir temporalmente y validar tablas
-        const tempRestore = path_1.default.join(dbDir, `restore-temp-${Date.now()}.db`);
-        fs_1.default.writeFileSync(tempRestore, buffer);
-        let clientCount = 0;
-        let userCount = 0;
-        try {
-            const testDb = new better_sqlite3_1.default(tempRestore, { readonly: true });
-            userCount = testDb.prepare('SELECT count(*) as count FROM users').get()?.count ?? 0;
-            clientCount = testDb.prepare('SELECT count(*) as count FROM clients').get()?.count ?? 0;
-            testDb.close();
-        }
-        catch (testErr) {
-            if (fs_1.default.existsSync(tempRestore))
-                fs_1.default.unlinkSync(tempRestore);
-            return res.status(400).json({ error: `La base de datos está dañada o incompatible: ${testErr.message}` });
-        }
-        // 4. Limpiar WAL/SHM antiguos
-        const walPath = path_1.default.join(dbDir, 'dearbackup.db-wal');
-        const shmPath = path_1.default.join(dbDir, 'dearbackup.db-shm');
-        if (fs_1.default.existsSync(walPath))
-            try {
-                fs_1.default.unlinkSync(walPath);
+        // 2. Si se solicitó nueva contraseña para el administrador
+        let passwordUpdated = false;
+        let targetUsername = '';
+        if (result.users.length > 0) {
+            const adminUser = result.users.find(u => u.role === 'admin') || result.users[0];
+            targetUsername = adminUser.username;
+            if (newAdminPassword && newAdminPassword.length >= 8) {
+                const newHash = await bcryptjs_1.default.hash(newAdminPassword, 10);
+                database_1.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newHash, adminUser.id);
+                passwordUpdated = true;
             }
-            catch (_) { }
-        if (fs_1.default.existsSync(shmPath))
-            try {
-                fs_1.default.unlinkSync(shmPath);
-            }
-            catch (_) { }
-        // 5. Sobreescribir archivo principal
-        fs_1.default.copyFileSync(tempRestore, dbPath);
-        try {
-            fs_1.default.unlinkSync(tempRestore);
         }
-        catch (_) { }
-        // 6. Refrescar WAL
-        try {
-            database_1.db.pragma('wal_checkpoint(TRUNCATE)');
-        }
-        catch (_) { }
         res.json({
             success: true,
-            message: `¡Base de datos restaurada con éxito! Se cargaron ${clientCount} clientes y ${userCount} usuarios registrados.`,
-            clientCount,
-            userCount
+            message: `¡Base de datos restaurada con éxito! Se cargaron ${result.clientCount} clientes y ${result.userCount} usuarios.`,
+            clientCount: result.clientCount,
+            userCount: result.userCount,
+            users: result.users.map(u => ({ username: u.username, role: u.role })),
+            targetUsername,
+            passwordUpdated,
+            vaultUnlocked
         });
     }
     catch (err) {

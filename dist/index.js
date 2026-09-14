@@ -101,3 +101,10 @@ server.listen(PORT, () => {
     // Inicializar programador de tareas
     scheduler_service_1.SchedulerService.init();
 });
+// Protección contra caídas abruptas del servidor por errores no controlados
+process.on('uncaughtException', (err) => {
+    console.error('⚠️ Error no capturado (uncaughtException):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('⚠️ Promesa rechazada no capturada (unhandledRejection):', reason?.message || reason);
+});

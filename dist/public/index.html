@@ -51,19 +51,64 @@
           <span>🚀 Inicializar Plataforma & Vault</span>
         </button>
 
-        <div style="text-align: center; margin-top: 16px;">
+        <div style="display: flex; gap: 8px; justify-content: center; margin-top: 16px; flex-wrap: wrap;">
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-toggle-setup-restore-db" style="color: var(--accent-amber);">
+            <span>🗄️ ¿Tienes un respaldo (.db / .tar.gz)? Restaurar aquí</span>
+          </button>
           <button type="button" class="btn btn-ghost btn-sm" id="btn-toggle-setup-import" style="color: var(--accent-cyan);">
-            <span>📦 ¿Tienes un archivo .dearconfig de otra máquina? Clic aquí para importar</span>
+            <span>📦 ¿Tienes un archivo .dearconfig? Importar</span>
           </button>
         </div>
       </form>
 
-      <!-- Sub-formulario para importar configuración inicial desde otra máquina -->
+      <!-- Sub-formulario para Restaurar Base de Datos Completa (.db / .sqlite / .tar.gz) -->
+      <form id="setup-restore-db-form" class="flow-form hidden">
+        <div class="info-callout" style="border-left-color: var(--accent-amber);">
+          <span class="info-icon">🗄️</span>
+          <div>
+            <strong>Restaurar Base de Datos Completa:</strong>
+            <p>Sube tu archivo <code>dearbackup.db</code>, snapshot <code>dearbackup_db_*.db</code> o exportación <code>.tar.gz</code> para restaurar clientes, historial y configuraciones.</p>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="setup-restore-db-file">Archivo de Base de Datos (.db, .sqlite, .tar.gz)</label>
+          <input type="file" id="setup-restore-db-file" accept=".db,.sqlite,.tar.gz" required style="padding: 8px; border: 1px dashed var(--border-color);">
+        </div>
+
+        <div class="form-group">
+          <label for="setup-restore-db-password">
+            Nueva Contraseña de Administrador (Opcional)
+            <span class="tooltip" title="Si la defines, se actualizará el usuario administrador del respaldo para que puedas iniciar sesión de inmediato con esta clave.">ℹ️</span>
+          </label>
+          <input type="password" id="setup-restore-db-password" placeholder="Dejar en blanco para mantener la clave original" minlength="8" autocomplete="new-password">
+          <small class="helper-text">💡 Recomendado si no recuerdas la contraseña que tenías en la otra máquina.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="setup-restore-db-vault-phrase">
+            Frase Maestra del Vault (Opcional)
+            <span class="tooltip" title="Frase secreta para descifrar contraseñas de bases de datos y llaves SSH.">ℹ️</span>
+          </label>
+          <input type="password" id="setup-restore-db-vault-phrase" placeholder="Frase usada en el equipo anterior" autocomplete="current-password">
+          <small class="helper-text">🔑 Si tu respaldo ya incluía <code>.vault_key</code>, se auto-desbloqueará.</small>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="setup-restore-db-submit-btn" style="background: linear-gradient(135deg, #f59e0b, #d97706); border-color: #d97706;">
+          <span>🔄 Restaurar Base de Datos e Iniciar</span>
+        </button>
+
+        <button type="button" class="btn btn-ghost btn-block btn-sm mt-2 btn-back-to-setup-manual">
+          <span>← Volver a Configuración Manual</span>
+        </button>
+      </form>
+
+      <!-- Sub-formulario para importar configuración inicial desde otra máquina (.dearconfig) -->
       <form id="setup-import-form" class="flow-form hidden">
         <div class="info-callout">
           <span class="info-icon">📦</span>
           <div>
-            <strong>Restaurar desde otra máquina:</strong>
+            <strong>Restaurar desde paquete .dearconfig:</strong>
             <p>Carga tu archivo <code>.dearconfig</code> exportado para restaurar clientes, credenciales y llaves SSH en 1 clic.</p>
           </div>
         </div>
@@ -92,7 +137,7 @@
           <span>🚀 Importar Configuración e Iniciar</span>
         </button>
 
-        <button type="button" class="btn btn-ghost btn-block btn-sm mt-2" id="btn-cancel-setup-import">
+        <button type="button" class="btn btn-ghost btn-block btn-sm mt-2 btn-back-to-setup-manual">
           <span>← Volver a Configuración Manual</span>
         </button>
       </form>
@@ -140,6 +185,13 @@
         <button type="submit" class="btn btn-primary btn-block btn-lg" id="login-submit-btn">
           <span>🔐 Iniciar Sesión</span>
         </button>
+
+        <div style="text-align: center; margin-top: 14px; font-size: 0.85rem; color: var(--text-muted);">
+          <span>¿No recuerdas tus credenciales tras restaurar?</span><br>
+          <a href="javascript:void(0)" id="btn-show-login-recovery-hint" style="color: var(--accent-cyan); text-decoration: underline; font-weight: 500;">
+            💡 Ver cómo restablecer credenciales
+          </a>
+        </div>
       </form>
 
       <!-- Sub-formulario para Paso 2 (Código 2FA) -->
@@ -834,11 +886,17 @@
                   <div style="flex: 1; padding: 16px; background: rgba(255,255,255,0.015); border: 1px solid var(--border-color); border-radius: 10px; display: flex; flex-direction: column; justify-content: space-between;">
                     <div>
                       <strong>📤 Subir y Restaurar dearbackup.db</strong>
-                      <p class="text-muted" style="font-size: 0.85rem; margin: 4px 0 10px 0;">Carga un archivo SQLite previo para restaurar el sistema al instante.</p>
+                      <p class="text-muted" style="font-size: 0.85rem; margin: 4px 0 10px 0;">Carga un archivo SQLite (.db) o exportación .tar.gz para restaurar el sistema al instante.</p>
                     </div>
                     <form id="restore-db-form" class="flow-form" style="margin-top: 4px;">
                       <div class="form-group" style="margin-bottom: 8px;">
-                        <input type="file" id="restore-db-file" accept=".db,.sqlite" required style="padding: 6px; border: 1px dashed var(--border-color); width: 100%;">
+                        <input type="file" id="restore-db-file" accept=".db,.sqlite,.tar.gz" required style="padding: 6px; border: 1px dashed var(--border-color); width: 100%;">
+                      </div>
+                      <div class="form-group" style="margin-bottom: 8px;">
+                        <input type="password" id="restore-db-new-password" placeholder="Nueva clave de admin (opcional)" style="padding: 6px 10px; font-size: 0.85rem; width: 100%; border-radius: 6px; border: 1px solid var(--border-color); background: rgba(0,0,0,0.2); color: var(--text-main);">
+                      </div>
+                      <div class="form-group" style="margin-bottom: 8px;">
+                        <input type="password" id="restore-db-vault-phrase" placeholder="Frase Maestra del Vault (opcional)" style="padding: 6px 10px; font-size: 0.85rem; width: 100%; border-radius: 6px; border: 1px solid var(--border-color); background: rgba(0,0,0,0.2); color: var(--text-main);">
                       </div>
                       <button type="submit" class="btn btn-outline btn-block" id="btn-restore-db" style="border-color: var(--accent-amber); color: var(--accent-amber);">
                         <span>🔄 Cargar y Restaurar BD</span>

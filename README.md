@@ -68,6 +68,72 @@ pm2 save
 
 ---
 
+## 📦 Migración, Exportación y Restauración de Base de Datos
+
+Si vas a migrar DearBackup a otra computadora o laptop (Windows 11, Linux o macOS), sigue cualquiera de estos métodos.
+
+### 1. Exportar en la máquina actual
+- **Desde la Terminal:**
+  ```bash
+  npm run export-db
+  ```
+  Genera un paquete consolidado `.tar.gz` en `backups/system_exports/` que incluye la base de datos `dearbackup.db`, la clave del Vault `.vault_key` y el archivo `.env`.
+- **Desde la Web:** Ve a **Ajustes > Descargar Base de Datos (dearbackup.db)**.
+
+---
+
+### 2. Restaurar en la nueva computadora (Por Terminal - Método Rápido y 100% Seguro)
+
+> [!IMPORTANT]
+> **En Windows 11**: Si tienes abierto `npm run dev` o `npm start`, presiona `Ctrl + C` para detener el servidor antes de importar por terminal. Esto evita errores de bloqueo de archivo (`EBUSY: resource busy or locked`).
+
+Pasa el archivo descargado (`.db` o `.tar.gz`) a la carpeta de DearBackup en tu nuevo equipo y ejecuta:
+
+```bash
+# Opción A: Restaurar manteniendo tus credenciales originales
+npm run import-db -- "ruta/al/archivo.db"
+
+# Opción B: Si tienes un archivo .tar.gz exportado
+npm run import-db -- "dearbackup_full_db_2026-09-14T01-40-15.tar.gz"
+
+# Opción C: Restaurar y definir de una vez una NUEVA contraseña de admin
+npm run import-db -- "dearbackup.db" --reset-pass "MiNuevaClave2026"
+```
+
+El script verificará la integridad SQLite, listará los nombres de usuario exactos registrados en la base de datos (por ejemplo: `brianv`) y te confirmará el estado del Vault.
+
+Luego inicia el servidor:
+```bash
+npm run dev
+```
+
+---
+
+### 3. Herramienta de Recuperación de Emergencia (CLI Interactivo)
+
+Si no recuerdas la contraseña de administrador, tu usuario o la frase secreta del Vault, usa la herramienta integrada:
+
+```bash
+npm run recovery
+```
+
+Menú disponible:
+1. `🔐 Restablecer Frase Secreta del Vault`: Deriva una nueva Master Key y actualiza `data/.vault_key`.
+2. `🔑 Ver y Restablecer Contraseña de Administrador`: Lista los usuarios reales del sistema (`brianv`) y te permite cambiar su contraseña en segundos.
+3. `📲 Desactivar 2FA / Passkeys`: Permite entrar con solo contraseña si perdiste tu autenticador.
+4. `🔓 Descifrar un archivo de respaldo (.enc)`: Descifra copias de clientes protegidas.
+5. `📥 Restaurar Base de Datos desde archivo`: Permite cargar un `.db` o `.tar.gz` de forma guiada.
+6. `🗑️ Reiniciar plataforma de cero`: Limpia todos los datos para volver al asistente inicial.
+
+---
+
+### 4. Restauración Directa vía Web
+
+- **Al instalar en un equipo nuevo:** En la pantalla de bienvenida (Setup), haz clic en **"🗄️ ¿Tienes un respaldo (.db / .tar.gz)? Restaurar aquí"**, sube tu archivo y (opcionalmente) asigna una nueva contraseña para ingresar de inmediato.
+- **Con la plataforma activa:** Ve a **Ajustes > Subir y Restaurar dearbackup.db**, selecciona el archivo e ingresa tu clave si deseas renovarla.
+
+---
+
 ## 🛠️ Flujo de Configuración en 3 Pasos
 
 1. **Paso 1: Asistente Inicial (Setup Wizard):**  

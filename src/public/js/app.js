@@ -142,25 +142,93 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('Tu sesión ha expirado. Por favor inicia sesión nuevamente.', 'error');
   });
 
-  // Alternar entre formulario manual y de importación en Setup Wizard
+  // Alternar formularios en Setup Wizard (Manual, Restauración de BD y Paquete .dearconfig)
   const btnToggleSetupImport = document.getElementById('btn-toggle-setup-import');
-  const btnCancelSetupImport = document.getElementById('btn-cancel-setup-import');
+  const btnToggleSetupRestoreDb = document.getElementById('btn-toggle-setup-restore-db');
   const setupForm = document.getElementById('setup-form');
   const setupImportForm = document.getElementById('setup-import-form');
+  const setupRestoreDbForm = document.getElementById('setup-restore-db-form');
+
+  const showSetupForm = (targetForm) => {
+    if (setupForm) setupForm.classList.add('hidden');
+    if (setupImportForm) setupImportForm.classList.add('hidden');
+    if (setupRestoreDbForm) setupRestoreDbForm.classList.add('hidden');
+    if (targetForm) targetForm.classList.remove('hidden');
+  };
 
   if (btnToggleSetupImport) {
-    btnToggleSetupImport.addEventListener('click', () => {
-      setupForm.classList.add('hidden');
-      setupImportForm.classList.remove('hidden');
-    });
+    btnToggleSetupImport.addEventListener('click', () => showSetupForm(setupImportForm));
   }
-  if (btnCancelSetupImport) {
-    btnCancelSetupImport.addEventListener('click', () => {
-      setupImportForm.classList.add('hidden');
-      setupForm.classList.remove('hidden');
+
+  if (btnToggleSetupRestoreDb) {
+    btnToggleSetupRestoreDb.addEventListener('click', () => showSetupForm(setupRestoreDbForm));
+  }
+
+  document.querySelectorAll('.btn-back-to-setup-manual').forEach(btn => {
+    btn.addEventListener('click', () => showSetupForm(setupForm));
+  });
+
+  // 1.1 Restaurar Base de Datos Física (.db / .sqlite / .tar.gz) en Setup Wizard
+  if (setupRestoreDbForm) {
+    setupRestoreDbForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('setup-restore-db-file');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        return showToast('Por favor selecciona un archivo .db o .tar.gz', 'error');
+      }
+
+      const btn = document.getElementById('setup-restore-db-submit-btn');
+      const originalText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ Restaurando base de datos...</span>';
+
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+
+      reader.onload = async (event) => {
+        try {
+          const arrayBuffer = event.target.result;
+          const bytes = new Uint8Array(arrayBuffer);
+          let binary = '';
+          const len = bytes.byteLength;
+          for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const base64 = btoa(binary);
+
+          const payload = {
+            dbBase64: base64,
+            newAdminPassword: document.getElementById('setup-restore-db-password')?.value || undefined,
+            vaultPassphrase: document.getElementById('setup-restore-db-vault-phrase')?.value || undefined
+          };
+
+          const res = await API.post('/auth/restore-database-setup', payload);
+          if (res.token) {
+            API.setToken(res.token);
+          }
+          showToast(res.message, 'success');
+          setTimeout(() => {
+            checkAuthStatus();
+          }, 1000);
+        } catch (err) {
+          showToast(`Error al restaurar: ${err.message}`, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = originalText;
+        }
+      };
+
+      reader.onerror = () => {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        showToast('Error al leer el archivo de base de datos', 'error');
+      };
+
+      reader.readAsArrayBuffer(file);
     });
   }
 
+  // 1.2 Importar Paquete de Configuración (.dearconfig) en Setup Wizard
   if (setupImportForm) {
     setupImportForm.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -206,6 +274,21 @@ document.addEventListener('DOMContentLoaded', () => {
       };
 
       reader.readAsText(file);
+    });
+  }
+
+  // Botón de Ayuda en Login para Recuperar Credenciales
+  const btnLoginRecoveryHint = document.getElementById('btn-show-login-recovery-hint');
+  if (btnLoginRecoveryHint) {
+    btnLoginRecoveryHint.addEventListener('click', (e) => {
+      e.preventDefault();
+      alert(
+        '🛡️ AYUDA PARA RECUPERAR ACCESO:\n\n' +
+        '1. Si restauraste un respaldo de otra máquina, el usuario suele ser el que tenías originalmente (por ejemplo: "brianv", en vez de "admin").\n\n' +
+        '2. Para ver tus usuarios o cambiar tu contraseña al instante, abre una terminal en tu laptop y ejecuta:\n' +
+        '   npm run recovery\n\n' +
+        '3. Selecciona la Opción 2 ("Restablecer Contraseña de Administrador") y define tu nueva contraseña.'
+      );
     });
   }
 
@@ -2053,13 +2136,21 @@ document.addEventListener('DOMContentLoaded', () => {
           for (let i = 0; i < len; i++) {
             binary += String.fromCharCode(bytes[i]);
           }
-          const base64 = btoa(binary);
+          const payload = {
+            dbBase64: base64,
+            newAdminPassword: document.getElementById('restore-db-new-password')?.value || undefined,
+            vaultPassphrase: document.getElementById('restore-db-vault-phrase')?.value || undefined
+          };
 
-          const res = await API.post('/settings/restore-database', { dbBase64: base64 });
-          showToast(res.message, 'success');
+          const res = await API.post('/settings/restore-database', payload);
+          let extraMsg = '';
+          if (res.targetUsername) {
+            extraMsg = ` (Usuario admin: ${res.targetUsername})`;
+          }
+          showToast(`${res.message}${extraMsg}`, 'success');
           setTimeout(() => {
             window.location.reload();
-          }, 2000);
+          }, 2500);
         } catch (err) {
           showToast(`Error al restaurar: ${err.message}`, 'error');
         } finally {

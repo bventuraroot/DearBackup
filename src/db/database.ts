@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
 
 const DB_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 if (!fs.existsSync(DB_DIR)) {
@@ -8,11 +9,180 @@ if (!fs.existsSync(DB_DIR)) {
 }
 
 const DB_PATH = path.join(DB_DIR, 'dearbackup.db');
-export const db = new Database(DB_PATH);
 
-// Habilitar Foreign Keys y modo WAL para máxima concurrencia y velocidad
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+let _db = new Database(DB_PATH);
+_db.pragma('journal_mode = WAL');
+_db.pragma('foreign_keys = ON');
+
+export const db: Database.Database = new Proxy({} as Database.Database, {
+  get(_target, prop) {
+    const val = (_db as any)[prop];
+    if (typeof val === 'function') {
+      return val.bind(_db);
+    }
+    return val;
+  }
+});
+
+export function closeDatabase(): void {
+  try {
+    _db.pragma('wal_checkpoint(TRUNCATE)');
+  } catch (_) {}
+  try {
+    _db.close();
+  } catch (_) {}
+}
+
+export function reopenDatabase(): void {
+  try {
+    _db.close();
+  } catch (_) {}
+  _db = new Database(DB_PATH);
+  _db.pragma('journal_mode = WAL');
+  _db.pragma('foreign_keys = ON');
+}
+
+export interface RestoredDatabaseResult {
+  clientCount: number;
+  userCount: number;
+  users: Array<{ id: string; username: string; role: string }>;
+  restoredVaultKey: boolean;
+}
+
+/**
+ * Reemplaza de forma atómica y segura el archivo dearbackup.db cerrando
+ * previamente la conexión para evitar errores EBUSY en Windows 11.
+ */
+export function replaceDatabaseFile(buffer: Buffer): RestoredDatabaseResult {
+  let dbBuffer = buffer;
+  let restoredVaultKey = false;
+
+  // Si es un archivo .tar.gz (GZIP)
+  if (buffer.length > 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    const tempExtractDir = path.join(DB_DIR, `temp_extract_${Date.now()}`);
+    fs.mkdirSync(tempExtractDir, { recursive: true });
+    const tempTarPath = path.join(tempExtractDir, 'archive.tar.gz');
+    fs.writeFileSync(tempTarPath, buffer);
+
+    try {
+      execSync(`tar -xzf "${tempTarPath}" -C "${tempExtractDir}"`, { stdio: 'ignore' });
+
+      // Buscar dearbackup.db
+      const candidatePaths = [
+        path.join(tempExtractDir, 'data', 'dearbackup.db'),
+        path.join(tempExtractDir, 'dearbackup.db'),
+      ];
+      let foundDbPath = candidatePaths.find(p => fs.existsSync(p));
+
+      if (!foundDbPath) {
+        const findDbRecursive = (dir: string): string | null => {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              const res = findDbRecursive(full);
+              if (res) return res;
+            } else if (entry.isFile() && (entry.name.endsWith('.db') || entry.name.endsWith('.sqlite'))) {
+              return full;
+            }
+          }
+          return null;
+        };
+        foundDbPath = findDbRecursive(tempExtractDir) || undefined;
+      }
+
+      if (!foundDbPath) {
+        throw new Error('El archivo .tar.gz no contiene una base de datos válida (dearbackup.db).');
+      }
+
+      dbBuffer = fs.readFileSync(foundDbPath);
+
+      // Si el tar contiene .vault_key, restaurarlo también
+      const candidateVaultKeys = [
+        path.join(tempExtractDir, 'data', '.vault_key'),
+        path.join(tempExtractDir, '.vault_key')
+      ];
+      const foundVaultKey = candidateVaultKeys.find(p => fs.existsSync(p));
+      if (foundVaultKey) {
+        fs.copyFileSync(foundVaultKey, path.join(DB_DIR, '.vault_key'));
+        restoredVaultKey = true;
+      }
+    } finally {
+      try {
+        fs.rmSync(tempExtractDir, { recursive: true, force: true });
+      } catch (_) {}
+    }
+  }
+
+  // Validar cabecera SQLite
+  if (dbBuffer.length < 100 || dbBuffer.subarray(0, 15).toString() !== 'SQLite format 3') {
+    throw new Error('El archivo no es una base de datos SQLite válida (cabecera no coincide).');
+  }
+
+  // Escribir archivo temporal para validar integridad y estructura
+  const tempValidate = path.join(DB_DIR, `validate_temp_${Date.now()}.db`);
+  fs.writeFileSync(tempValidate, dbBuffer);
+
+  let userCount = 0;
+  let clientCount = 0;
+  let users: Array<{ id: string; username: string; role: string }> = [];
+
+  try {
+    const testDb = new Database(tempValidate, { readonly: true });
+    try {
+      users = testDb.prepare('SELECT id, username, role FROM users').all() as any[];
+      userCount = users.length;
+    } catch (_) {
+      users = [];
+      userCount = 0;
+    }
+    try {
+      clientCount = (testDb.prepare('SELECT count(*) as count FROM clients').get() as any)?.count ?? 0;
+    } catch (_) {
+      clientCount = 0;
+    }
+    testDb.close();
+  } catch (testErr: any) {
+    try { fs.unlinkSync(tempValidate); } catch (_) {}
+    throw new Error(`La base de datos está dañada o no es compatible: ${testErr.message}`);
+  }
+
+  // 1. Checkpoint y cerrar conexión actual para liberar locks de Windows (EBUSY)
+  closeDatabase();
+
+  // 2. Crear respaldo previo de seguridad
+  const preRestoreBak = path.join(DB_DIR, `dearbackup_backup_pre_restore_${Date.now()}.db.bak`);
+  if (fs.existsSync(DB_PATH)) {
+    try { fs.copyFileSync(DB_PATH, preRestoreBak); } catch (_) {}
+  }
+
+  // 3. Eliminar WAL y SHM antiguos
+  const walPath = `${DB_PATH}-wal`;
+  const shmPath = `${DB_PATH}-shm`;
+  try { if (fs.existsSync(walPath)) fs.unlinkSync(walPath); } catch (_) {}
+  try { if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath); } catch (_) {}
+
+  // 4. Copiar nueva base de datos hacia DB_PATH
+  try {
+    fs.copyFileSync(tempValidate, DB_PATH);
+    try { fs.unlinkSync(tempValidate); } catch (_) {}
+  } catch (copyErr: any) {
+    if (fs.existsSync(preRestoreBak)) {
+      try { fs.copyFileSync(preRestoreBak, DB_PATH); } catch (_) {}
+    }
+    reopenDatabase();
+    throw copyErr;
+  }
+
+  // 5. Reabrir conexión SQLite limpia
+  reopenDatabase();
+
+  // 6. Aplicar posibles migraciones de esquema
+  initDatabase();
+
+  return { clientCount, userCount, users, restoredVaultKey };
+}
+
 
 export function initDatabase() {
   db.exec(`
