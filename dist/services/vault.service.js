@@ -18,10 +18,65 @@ const ITERATIONS = 100000;
 class VaultService {
     static masterKey = null;
     static secretPhrase = null;
+    static getVaultKeyFilePath() {
+        const dataDir = process.env.DATA_DIR || path_1.default.join(process.cwd(), 'data');
+        return path_1.default.join(dataDir, '.vault_key');
+    }
+    /**
+     * Guarda de manera segura la frase/clave del Vault en disco (permisos restrictivos)
+     */
+    static persistKey(phrase) {
+        try {
+            const keyPath = this.getVaultKeyFilePath();
+            const dir = path_1.default.dirname(keyPath);
+            if (!fs_1.default.existsSync(dir)) {
+                fs_1.default.mkdirSync(dir, { recursive: true });
+            }
+            fs_1.default.writeFileSync(keyPath, phrase, { mode: 0o600, encoding: 'utf8' });
+        }
+        catch (err) {
+            console.warn('No se pudo guardar .vault_key en disco:', err.message);
+        }
+    }
+    /**
+     * Intenta desbloquear automáticamente el Vault al arrancar el servidor
+     */
+    static tryAutoUnlock() {
+        if (this.isUnlocked())
+            return true;
+        // 1. Intentar con variable de entorno VAULT_PASSPHRASE
+        const envPass = process.env.VAULT_PASSPHRASE;
+        if (envPass && this.initializeMasterKey(envPass, false)) {
+            console.log('✓ Vault auto-desbloqueado mediante variable VAULT_PASSPHRASE.');
+            return true;
+        }
+        // 2. Intentar con archivo persistente .vault_key
+        try {
+            const keyPath = this.getVaultKeyFilePath();
+            if (fs_1.default.existsSync(keyPath)) {
+                const savedPhrase = fs_1.default.readFileSync(keyPath, 'utf8').trim();
+                if (savedPhrase && this.initializeMasterKey(savedPhrase, false)) {
+                    console.log('✓ Vault auto-desbloqueado mediante .vault_key persistente.');
+                    return true;
+                }
+            }
+        }
+        catch (err) {
+            console.warn('Aviso leyendo .vault_key:', err.message);
+        }
+        // 3. Intentar con APP_SECRET
+        const appSecret = process.env.APP_SECRET;
+        if (appSecret && this.initializeMasterKey(appSecret, false)) {
+            console.log('✓ Vault auto-desbloqueado mediante APP_SECRET.');
+            return true;
+        }
+        console.log('ℹ️ Vault actualmente bloqueado (esperando frase maestra del usuario o inicio de sesión).');
+        return false;
+    }
     /**
      * Inicializa o verifica la llave maestra del sistema
      */
-    static initializeMasterKey(secretPhrase) {
+    static initializeMasterKey(secretPhrase, persist = true) {
         const saltRow = database_1.db.prepare('SELECT value FROM settings WHERE key = ?').get('master_vault_salt');
         let salt;
         if (!saltRow) {
@@ -32,6 +87,8 @@ class VaultService {
             this.secretPhrase = secretPhrase;
             const testHash = crypto_1.default.createHmac('sha256', derivedKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
             database_1.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('master_vault_check', testHash);
+            if (persist)
+                this.persistKey(secretPhrase);
             return true;
         }
         else {
@@ -46,6 +103,8 @@ class VaultService {
             }
             this.masterKey = derivedKey;
             this.secretPhrase = secretPhrase;
+            if (persist)
+                this.persistKey(secretPhrase);
             return true;
         }
     }
@@ -56,10 +115,19 @@ class VaultService {
         const check = database_1.db.prepare('SELECT value FROM settings WHERE key = ?').get('master_vault_check');
         return !!check;
     }
-    static setMasterKeyDirect(key, phrase) {
+    static setMasterKeyDirect(key, phrase, persist = true) {
         this.masterKey = key;
-        if (phrase)
+        if (phrase) {
             this.secretPhrase = phrase;
+            if (persist)
+                this.persistKey(phrase);
+        }
+    }
+    static getMasterKey() {
+        return this.masterKey;
+    }
+    static getSecretPhrase() {
+        return this.secretPhrase;
     }
     static getEncryptionSecret() {
         return this.secretPhrase || process.env.APP_SECRET || 'dearbackup_ultra_secure_master_token_2026_change_me';
@@ -110,10 +178,15 @@ class VaultService {
     static getOrCreateSystemSSHKey() {
         const pubRow = database_1.db.prepare('SELECT value FROM settings WHERE key = ?').get('system_ssh_key_pub');
         const privRow = database_1.db.prepare('SELECT value FROM settings WHERE key = ?').get('system_ssh_key_priv');
-        if (pubRow && privRow) {
+        if (pubRow || privRow) {
+            const publicKey = pubRow?.value || '';
+            const privateKey = privRow ? this.decrypt(privRow.value) : '';
+            if (!privateKey && privRow && !this.isUnlocked()) {
+                console.warn('⚠️ Vault bloqueado: La llave SSH privada del sistema existe pero no puede descifrarse hasta desbloquear el Vault.');
+            }
             return {
-                publicKey: pubRow.value,
-                privateKey: this.decrypt(privRow.value)
+                publicKey,
+                privateKey
             };
         }
         // Generar nuevo par de llaves nativo OpenSSH usando ssh-keygen

@@ -7,6 +7,7 @@ exports.SchedulerService = void 0;
 const node_cron_1 = __importDefault(require("node-cron"));
 const database_1 = require("../db/database");
 const backup_service_1 = require("./backup.service");
+const self_backup_service_1 = require("./self-backup.service");
 class SchedulerService {
     static tasks = new Map();
     /**
@@ -40,6 +41,23 @@ class SchedulerService {
                     console.error(`Error programando cron para ${client.name}:`, err);
                 }
             }
+        }
+        // Programar auto-respaldo diario de la base de datos de DearBackup (03:00 AM)
+        try {
+            const selfBackupTask = node_cron_1.default.schedule('0 3 * * *', async () => {
+                console.log('⏰ Ejecutando auto-respaldo nocturno de la base de datos de DearBackup...');
+                try {
+                    await self_backup_service_1.SelfBackupService.runSelfBackup();
+                }
+                catch (err) {
+                    console.error('Error en auto-respaldo programado de base de datos:', err.message);
+                }
+            });
+            this.tasks.set('__system_self_backup__', selfBackupTask);
+            console.log('  ✓ Auto-respaldo nocturno de DearBackup programado: [0 3 * * *]');
+        }
+        catch (err) {
+            console.error('Error programando cron de auto-respaldo del sistema:', err.message);
         }
     }
     /**

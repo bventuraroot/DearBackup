@@ -15,10 +15,69 @@ export class VaultService {
   private static masterKey: Buffer | null = null;
   private static secretPhrase: string | null = null;
 
+  public static getVaultKeyFilePath(): string {
+    const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+    return path.join(dataDir, '.vault_key');
+  }
+
+  /**
+   * Guarda de manera segura la frase/clave del Vault en disco (permisos restrictivos)
+   */
+  public static persistKey(phrase: string): void {
+    try {
+      const keyPath = this.getVaultKeyFilePath();
+      const dir = path.dirname(keyPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(keyPath, phrase, { mode: 0o600, encoding: 'utf8' });
+    } catch (err: any) {
+      console.warn('No se pudo guardar .vault_key en disco:', err.message);
+    }
+  }
+
+  /**
+   * Intenta desbloquear automáticamente el Vault al arrancar el servidor
+   */
+  public static tryAutoUnlock(): boolean {
+    if (this.isUnlocked()) return true;
+
+    // 1. Intentar con variable de entorno VAULT_PASSPHRASE
+    const envPass = process.env.VAULT_PASSPHRASE;
+    if (envPass && this.initializeMasterKey(envPass, false)) {
+      console.log('✓ Vault auto-desbloqueado mediante variable VAULT_PASSPHRASE.');
+      return true;
+    }
+
+    // 2. Intentar con archivo persistente .vault_key
+    try {
+      const keyPath = this.getVaultKeyFilePath();
+      if (fs.existsSync(keyPath)) {
+        const savedPhrase = fs.readFileSync(keyPath, 'utf8').trim();
+        if (savedPhrase && this.initializeMasterKey(savedPhrase, false)) {
+          console.log('✓ Vault auto-desbloqueado mediante .vault_key persistente.');
+          return true;
+        }
+      }
+    } catch (err: any) {
+      console.warn('Aviso leyendo .vault_key:', err.message);
+    }
+
+    // 3. Intentar con APP_SECRET
+    const appSecret = process.env.APP_SECRET;
+    if (appSecret && this.initializeMasterKey(appSecret, false)) {
+      console.log('✓ Vault auto-desbloqueado mediante APP_SECRET.');
+      return true;
+    }
+
+    console.log('ℹ️ Vault actualmente bloqueado (esperando frase maestra del usuario o inicio de sesión).');
+    return false;
+  }
+
   /**
    * Inicializa o verifica la llave maestra del sistema
    */
-  public static initializeMasterKey(secretPhrase: string): boolean {
+  public static initializeMasterKey(secretPhrase: string, persist: boolean = true): boolean {
     const saltRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('master_vault_salt') as { value: string } | undefined;
     
     let salt: Buffer;
@@ -31,6 +90,8 @@ export class VaultService {
       this.secretPhrase = secretPhrase;
       const testHash = crypto.createHmac('sha256', derivedKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
       db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('master_vault_check', testHash);
+
+      if (persist) this.persistKey(secretPhrase);
       return true;
     } else {
       salt = Buffer.from(saltRow.value, 'hex');
@@ -45,6 +106,8 @@ export class VaultService {
       }
       this.masterKey = derivedKey;
       this.secretPhrase = secretPhrase;
+
+      if (persist) this.persistKey(secretPhrase);
       return true;
     }
   }
@@ -58,9 +121,20 @@ export class VaultService {
     return !!check;
   }
 
-  public static setMasterKeyDirect(key: Buffer, phrase?: string) {
+  public static setMasterKeyDirect(key: Buffer, phrase?: string, persist: boolean = true) {
     this.masterKey = key;
-    if (phrase) this.secretPhrase = phrase;
+    if (phrase) {
+      this.secretPhrase = phrase;
+      if (persist) this.persistKey(phrase);
+    }
+  }
+
+  public static getMasterKey(): Buffer | null {
+    return this.masterKey;
+  }
+
+  public static getSecretPhrase(): string | null {
+    return this.secretPhrase;
   }
 
   public static getEncryptionSecret(): string {
@@ -117,10 +191,15 @@ export class VaultService {
     const pubRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('system_ssh_key_pub') as { value: string } | undefined;
     const privRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('system_ssh_key_priv') as { value: string } | undefined;
 
-    if (pubRow && privRow) {
+    if (pubRow || privRow) {
+      const publicKey = pubRow?.value || '';
+      const privateKey = privRow ? this.decrypt(privRow.value) : '';
+      if (!privateKey && privRow && !this.isUnlocked()) {
+        console.warn('⚠️ Vault bloqueado: La llave SSH privada del sistema existe pero no puede descifrarse hasta desbloquear el Vault.');
+      }
       return {
-        publicKey: pubRow.value,
-        privateKey: this.decrypt(privRow.value)
+        publicKey,
+        privateKey
       };
     }
 

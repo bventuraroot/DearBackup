@@ -1,7 +1,13 @@
 node_modules/
 dist/
 backups/
-data/*.db-wal
-data/*.db-shm
+data/*.db
+data/*.db-*
+data/*.sqlite*
+data/*.bak
+data/.vault_key
+.env
+*.dearconfig
 *.log
 .DS_Store
+

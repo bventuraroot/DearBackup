@@ -88,15 +88,126 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       box.querySelector('.status-dot').style.backgroundColor = 'var(--accent-amber)';
       box.querySelector('.status-dot').style.boxShadow = '0 0 8px var(--accent-amber)';
-      label.textContent = 'Bloqueado';
+      label.textContent = 'Bloqueado (Clic para abrir)';
     }
   }
+
+  // Modal de desbloqueo rápido del Vault
+  const vaultUnlockModal = document.getElementById('vault-unlock-modal');
+  const vaultStatusBox = document.getElementById('vault-status-box');
+  const vaultUnlockForm = document.getElementById('vault-unlock-form');
+
+  if (vaultStatusBox) {
+    vaultStatusBox.addEventListener('click', () => {
+      vaultUnlockModal.classList.remove('hidden');
+      document.getElementById('vault-unlock-phrase').value = '';
+      document.getElementById('vault-unlock-phrase').focus();
+    });
+  }
+
+  document.getElementById('vault-unlock-modal-close')?.addEventListener('click', () => {
+    vaultUnlockModal.classList.add('hidden');
+  });
+  document.getElementById('btn-cancel-vault-unlock')?.addEventListener('click', () => {
+    vaultUnlockModal.classList.add('hidden');
+  });
+
+  vaultUnlockForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-submit-vault-unlock');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳ Desbloqueando...</span>';
+
+    try {
+      const phrase = document.getElementById('vault-unlock-phrase').value;
+      const remember = document.getElementById('vault-unlock-remember').checked;
+
+      const res = await API.post('/auth/unlock-vault', { masterKeyPhrase: phrase, remember });
+      updateVaultStatus(true);
+      vaultUnlockModal.classList.add('hidden');
+      showToast(res.message || '¡Vault desbloqueado con éxito!', 'success');
+      loadClients();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = originalText;
+    }
+  });
 
   window.addEventListener('auth:unauthorized', () => {
     loginView.classList.remove('hidden');
     appView.classList.add('hidden');
     showToast('Tu sesión ha expirado. Por favor inicia sesión nuevamente.', 'error');
   });
+
+  // Alternar entre formulario manual y de importación en Setup Wizard
+  const btnToggleSetupImport = document.getElementById('btn-toggle-setup-import');
+  const btnCancelSetupImport = document.getElementById('btn-cancel-setup-import');
+  const setupForm = document.getElementById('setup-form');
+  const setupImportForm = document.getElementById('setup-import-form');
+
+  if (btnToggleSetupImport) {
+    btnToggleSetupImport.addEventListener('click', () => {
+      setupForm.classList.add('hidden');
+      setupImportForm.classList.remove('hidden');
+    });
+  }
+  if (btnCancelSetupImport) {
+    btnCancelSetupImport.addEventListener('click', () => {
+      setupImportForm.classList.add('hidden');
+      setupForm.classList.remove('hidden');
+    });
+  }
+
+  if (setupImportForm) {
+    setupImportForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('setup-import-file');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        return showToast('Por favor selecciona un archivo .dearconfig', 'error');
+      }
+
+      const btn = document.getElementById('setup-import-submit-btn');
+      const originalText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ Importando y configurando...</span>';
+
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+
+      reader.onload = async (event) => {
+        try {
+          const fileContent = event.target.result;
+          const payload = {
+            packageData: fileContent,
+            packagePassphrase: document.getElementById('setup-import-pkg-pass').value,
+            username: document.getElementById('setup-import-username').value.trim(),
+            password: document.getElementById('setup-import-password').value
+          };
+
+          const res = await API.post('/auth/import-setup', payload);
+          API.setToken(res.token);
+          showToast(res.message, 'success');
+          checkAuthStatus();
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = originalText;
+        }
+      };
+
+      reader.onerror = () => {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        showToast('Error al leer el archivo seleccionado', 'error');
+      };
+
+      reader.readAsText(file);
+    });
+  }
 
   // =========================================================================
   // 2. SETUP WIZARD & LOGIN FORMS
@@ -1505,6 +1616,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('cloud-max-storage').value = cloud.maxStorageGB !== undefined ? cloud.maxStorageGB : 10;
       }
 
+      updateSelfBackupStatus();
     } catch (err) {
       showToast('Error cargando configuración', 'error');
     }
@@ -1804,6 +1916,199 @@ document.addEventListener('DOMContentLoaded', () => {
         btnExecutePurge.innerHTML = originalText;
       }
     });
+  }
+
+  // =========================================================================
+  // 13. PORTABILIDAD, EXPORTAR / IMPORTAR Y AUTO-RESPALDO (EN CONFIGURACIÓN)
+  // =========================================================================
+  function triggerDownloadRawDb() {
+    const token = API.getToken();
+    if (!token) return showToast('Sesión no válida o expirada', 'error');
+    showToast('Generando copia consolidada de dearbackup.db...', 'info');
+    window.location.href = `/api/settings/download-database?token=${encodeURIComponent(token)}`;
+  }
+
+  // Descarga directa de la base de datos SQLite
+  const btnDownloadRawDb = document.getElementById('btn-download-raw-db');
+  if (btnDownloadRawDb) {
+    btnDownloadRawDb.addEventListener('click', (e) => {
+      e.preventDefault();
+      triggerDownloadRawDb();
+    });
+  }
+
+  // Exportar configuración cifrada (.dearconfig)
+  const exportConfigForm = document.getElementById('export-config-form');
+  if (exportConfigForm) {
+    exportConfigForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('btn-export-config');
+      const originalText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ Cifrando y empaquetando...</span>';
+
+      try {
+        const passphrase = document.getElementById('export-config-password').value;
+        const res = await API.post('/settings/export-config', { passphrase });
+
+        if (res.package) {
+          const jsonBlob = new Blob([JSON.stringify(res.package, null, 2)], { type: 'application/json' });
+          const downloadUrl = URL.createObjectURL(jsonBlob);
+          const link = document.createElement('a');
+          link.href = downloadUrl;
+          link.download = res.filename || `dearbackup-config-${new Date().toISOString().slice(0, 10)}.dearconfig`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(downloadUrl);
+
+          showToast('¡Archivo .dearconfig exportado y descargado con éxito!', 'success');
+          document.getElementById('export-config-password').value = '';
+        }
+      } catch (err) {
+        showToast(`Error al exportar configuración: ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+      }
+    });
+  }
+
+  // Importar configuración cifrada (.dearconfig)
+  const importConfigForm = document.getElementById('import-config-form');
+  if (importConfigForm) {
+    importConfigForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('import-config-file');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        return showToast('Por favor selecciona un archivo .dearconfig a restaurar', 'error');
+      }
+
+      const passphrase = document.getElementById('import-config-password').value;
+      const btn = document.getElementById('btn-import-config');
+      const originalText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ Descifrando y restaurando...</span>';
+
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+
+      reader.onload = async (event) => {
+        try {
+          const fileContent = event.target.result;
+          const res = await API.post('/settings/import-config', {
+            packageData: fileContent,
+            passphrase
+          });
+
+          showToast(res.message, 'success');
+          importConfigForm.reset();
+          loadClients();
+          loadSettings();
+          loadDashboard();
+        } catch (err) {
+          showToast(`Fallo al importar: ${err.message}`, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = originalText;
+        }
+      };
+
+      reader.onerror = () => {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        showToast('Error al leer el archivo seleccionado', 'error');
+      };
+
+      reader.readAsText(file);
+    });
+  }
+
+  // Subir y restaurar archivo físico dearbackup.db desde la web
+  const restoreDbForm = document.getElementById('restore-db-form');
+  if (restoreDbForm) {
+    restoreDbForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('restore-db-file');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        return showToast('Por favor selecciona un archivo .db válido', 'error');
+      }
+
+      const file = fileInput.files[0];
+      const confirmed = confirm('⚠️ ATENCIÓN: Esta acción reemplazará la base de datos actual con la del archivo seleccionado.\n\nEl sistema creará una copia de respaldo automática antes de proceder y reiniciará la sesión.\n\n¿Deseas continuar con la restauración?');
+      if (!confirmed) return;
+
+      const btn = document.getElementById('btn-restore-db');
+      const originalText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ Restaurando base de datos...</span>';
+
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const arrayBuffer = event.target.result;
+          const bytes = new Uint8Array(arrayBuffer);
+          let binary = '';
+          const len = bytes.byteLength;
+          for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const base64 = btoa(binary);
+
+          const res = await API.post('/settings/restore-database', { dbBase64: base64 });
+          showToast(res.message, 'success');
+          setTimeout(() => {
+            window.location.reload();
+          }, 2000);
+        } catch (err) {
+          showToast(`Error al restaurar: ${err.message}`, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = originalText;
+        }
+      };
+
+      reader.onerror = () => {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        showToast('Error al leer el archivo de base de datos', 'error');
+      };
+
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  // Disparar auto-respaldo nocturno inmediatamente
+  const btnTriggerSelfBackup = document.getElementById('btn-trigger-self-backup');
+  if (btnTriggerSelfBackup) {
+    btnTriggerSelfBackup.addEventListener('click', async () => {
+      const originalText = btnTriggerSelfBackup.innerHTML;
+      btnTriggerSelfBackup.disabled = true;
+      btnTriggerSelfBackup.innerHTML = '<span>⏳ Generando Snapshot...</span>';
+      try {
+        const res = await API.post('/settings/auto-backup-now', {});
+        showToast(res.message, 'success');
+        updateSelfBackupStatus();
+      } catch (err) {
+        showToast(`Error en auto-respaldo: ${err.message}`, 'error');
+      } finally {
+        btnTriggerSelfBackup.disabled = false;
+        btnTriggerSelfBackup.innerHTML = originalText;
+      }
+    });
+  }
+
+  async function updateSelfBackupStatus() {
+    try {
+      const status = await API.get('/settings/self-backup-status');
+      if (status && status.lastRun) {
+        const dateStr = new Date(status.lastRun).toLocaleString();
+        const el = document.getElementById('self-backup-status-text');
+        if (el) {
+          el.innerHTML = `Último snapshot: <strong>${dateStr}</strong> (${status.filename} - ${status.fileSizeMB} MB)${status.replicatedCloud ? ' <span style="color: var(--accent-green);">☁️ Replicado en Cloud</span>' : ''}`;
+        }
+      }
+    } catch {}
   }
 
   // =========================================================================

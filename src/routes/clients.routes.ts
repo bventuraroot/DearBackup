@@ -79,13 +79,20 @@ router.post('/test-connection', requireAuth, async (req: AuthRequest, res: Respo
   let finalDbPass = db_pass;
 
   // Si estamos editando y viene '********', recuperar del registro actual
-  if (client_id && (finalSshPass === '********' || finalSshPassphrase === '********' || finalDbPass === '********' || !finalSshKey)) {
+  if (client_id && (finalSshPass === '********' || finalSshPassphrase === '********' || finalDbPass === '********' || !finalSshKey || finalSshKey === '********')) {
     const existing = db.prepare('SELECT ssh_password, ssh_private_key, ssh_passphrase, db_pass FROM clients WHERE id = ?').get(client_id) as any;
     if (existing) {
-      if (finalSshPass === '********') finalSshPass = VaultService.decrypt(existing.ssh_password);
-      if (finalSshPassphrase === '********') finalSshPassphrase = VaultService.decrypt(existing.ssh_passphrase);
-      if (finalDbPass === '********') finalDbPass = VaultService.decrypt(existing.db_pass);
-      if (!finalSshKey && existing.ssh_private_key) finalSshKey = VaultService.decrypt(existing.ssh_private_key);
+      if (finalSshPass === '********') finalSshPass = existing.ssh_password ? VaultService.decrypt(existing.ssh_password) : '';
+      if (finalSshPassphrase === '********') finalSshPassphrase = existing.ssh_passphrase ? VaultService.decrypt(existing.ssh_passphrase) : '';
+      if (finalDbPass === '********') finalDbPass = existing.db_pass ? VaultService.decrypt(existing.db_pass) : '';
+      if ((!finalSshKey || finalSshKey === '********') && existing.ssh_private_key) {
+        finalSshKey = VaultService.decrypt(existing.ssh_private_key);
+        if (!finalSshKey && !VaultService.isUnlocked()) {
+          return res.status(400).json({
+            error: 'El Vault se encuentra bloqueado. Por favor ingresa la Frase del Vault para desbloquear tus credenciales antes de probar la conexión.'
+          });
+        }
+      }
     }
   }
 

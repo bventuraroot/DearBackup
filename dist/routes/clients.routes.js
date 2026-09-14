@@ -58,17 +58,23 @@ router.post('/test-connection', auth_routes_1.requireAuth, async (req, res) => {
     let finalSshPassphrase = ssh_passphrase;
     let finalDbPass = db_pass;
     // Si estamos editando y viene '********', recuperar del registro actual
-    if (client_id && (finalSshPass === '********' || finalSshPassphrase === '********' || finalDbPass === '********' || !finalSshKey)) {
+    if (client_id && (finalSshPass === '********' || finalSshPassphrase === '********' || finalDbPass === '********' || !finalSshKey || finalSshKey === '********')) {
         const existing = database_1.db.prepare('SELECT ssh_password, ssh_private_key, ssh_passphrase, db_pass FROM clients WHERE id = ?').get(client_id);
         if (existing) {
             if (finalSshPass === '********')
-                finalSshPass = vault_service_1.VaultService.decrypt(existing.ssh_password);
+                finalSshPass = existing.ssh_password ? vault_service_1.VaultService.decrypt(existing.ssh_password) : '';
             if (finalSshPassphrase === '********')
-                finalSshPassphrase = vault_service_1.VaultService.decrypt(existing.ssh_passphrase);
+                finalSshPassphrase = existing.ssh_passphrase ? vault_service_1.VaultService.decrypt(existing.ssh_passphrase) : '';
             if (finalDbPass === '********')
-                finalDbPass = vault_service_1.VaultService.decrypt(existing.db_pass);
-            if (!finalSshKey && existing.ssh_private_key)
+                finalDbPass = existing.db_pass ? vault_service_1.VaultService.decrypt(existing.db_pass) : '';
+            if ((!finalSshKey || finalSshKey === '********') && existing.ssh_private_key) {
                 finalSshKey = vault_service_1.VaultService.decrypt(existing.ssh_private_key);
+                if (!finalSshKey && !vault_service_1.VaultService.isUnlocked()) {
+                    return res.status(400).json({
+                        error: 'El Vault se encuentra bloqueado. Por favor ingresa la Frase del Vault para desbloquear tus credenciales antes de probar la conexión.'
+                    });
+                }
+            }
         }
     }
     try {

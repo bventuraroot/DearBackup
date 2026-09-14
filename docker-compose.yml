@@ -10,7 +10,7 @@ services:
       - NODE_ENV=production
       - APP_SECRET=dearbackup_ultra_secure_master_token_2026_change_me
       - JWT_SECRET=dearbackup_jwt_secret_token_change_me
-      - APP_URL=http://localhost:3000
+      - APP_URL=http://localhost:3050
       - TZ=America/El_Salvador
     volumes:
       - ./data:/app/data

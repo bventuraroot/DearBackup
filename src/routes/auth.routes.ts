@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { db } from '../db/database';
 import { VaultService } from '../services/vault.service';
 import { PasskeyService } from '../services/passkey.service';
+import { ConfigBackupService } from '../services/config-backup.service';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'dearbackup-jwt-secret-key-32b';
@@ -99,6 +100,60 @@ router.post('/setup', async (req: Request, res: Response) => {
 });
 
 /**
+ * Setup Wizard: Importar configuración durante la instalación inicial
+ */
+router.post('/import-setup', async (req: Request, res: Response) => {
+  const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any).count;
+  if (userCount > 0) {
+    return res.status(400).json({ error: 'El sistema ya ha sido inicializado previamente. Inicie sesión para importar.' });
+  }
+
+  const { packageData, packagePassphrase, username, password, masterKeyPhrase } = req.body;
+
+  if (!packageData || !packagePassphrase || !username || !password) {
+    return res.status(400).json({ error: 'Archivo de configuración, contraseñas y usuario son obligatorios.' });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'La contraseña de administrador debe tener al menos 8 caracteres.' });
+  }
+
+  try {
+    // 1. Inicializar Vault con la frase maestra provista (o la clave del paquete)
+    const finalVaultPhrase = masterKeyPhrase || packagePassphrase;
+    VaultService.initializeMasterKey(finalVaultPhrase, true);
+
+    // 2. Crear usuario administrador
+    const userId = crypto.randomUUID();
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    db.prepare(`
+      INSERT INTO users (id, username, password_hash, role)
+      VALUES (?, ?, ?, 'admin')
+    `).run(userId, username.trim().toLowerCase(), passwordHash);
+
+    // 3. Importar y re-cifrar clientes y configuraciones
+    const result = ConfigBackupService.importConfig(packageData, packagePassphrase);
+
+    // 4. Refrescar / inicializar llave SSH
+    VaultService.getOrCreateSystemSSHKey();
+
+    const token = jwt.sign({ id: userId, username: username.trim().toLowerCase(), role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({
+      success: true,
+      message: `¡Plataforma inicializada y configuración montada con éxito! (${result.importedClients} clientes restaurados)`,
+      token,
+      user: { id: userId, username: username.trim().toLowerCase(), role: 'admin' },
+      importedClients: result.importedClients,
+      importedSettings: result.importedSettings
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: `Error importando configuración: ${err.message}` });
+  }
+});
+
+/**
  * Iniciar Sesión (Paso 1: Usuario + Contraseña)
  */
 router.post('/login', async (req: Request, res: Response) => {
@@ -185,6 +240,32 @@ router.post('/login-2fa', async (req: Request, res: Response) => {
   } catch (err) {
     return res.status(401).json({ error: 'Sesión 2FA expirada. Inicie sesión nuevamente.' });
   }
+});
+
+/**
+ * Desbloquear el Vault en caliente (con sesión activa)
+ */
+router.post('/unlock-vault', requireAuth, (req: AuthRequest, res: Response) => {
+  const { masterKeyPhrase, remember } = req.body;
+  if (!masterKeyPhrase) {
+    return res.status(400).json({ error: 'La Frase Secreta del Vault es requerida.' });
+  }
+
+  const unlocked = VaultService.initializeMasterKey(masterKeyPhrase, remember !== false);
+  if (!unlocked) {
+    return res.status(400).json({ error: 'Frase Secreta del Vault incorrecta.' });
+  }
+
+  // Refrescar llave SSH por si estaba pendiente
+  try {
+    VaultService.getOrCreateSystemSSHKey();
+  } catch {}
+
+  res.json({
+    success: true,
+    message: '¡Vault desbloqueado exitosamente!',
+    vaultUnlocked: true
+  });
 });
 
 // =========================================================================

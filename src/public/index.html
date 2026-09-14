@@ -11,7 +11,7 @@
   <!-- SimpleWebAuthn Browser Script -->
   <script src="https://unpkg.com/@simplewebauthn/browser/dist/bundle/index.umd.min.js"></script>
   <!-- CSS Stylesheet -->
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=1.2.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2338bdf8'><path d='M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 6h2v2h-2V7zm0 4h2v6h-2v-6z'/></svg>">
 </head>
 <body>
@@ -49,6 +49,51 @@
 
         <button type="submit" class="btn btn-primary btn-block btn-lg" id="setup-submit-btn">
           <span>🚀 Inicializar Plataforma & Vault</span>
+        </button>
+
+        <div style="text-align: center; margin-top: 16px;">
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-toggle-setup-import" style="color: var(--accent-cyan);">
+            <span>📦 ¿Tienes un archivo .dearconfig de otra máquina? Clic aquí para importar</span>
+          </button>
+        </div>
+      </form>
+
+      <!-- Sub-formulario para importar configuración inicial desde otra máquina -->
+      <form id="setup-import-form" class="flow-form hidden">
+        <div class="info-callout">
+          <span class="info-icon">📦</span>
+          <div>
+            <strong>Restaurar desde otra máquina:</strong>
+            <p>Carga tu archivo <code>.dearconfig</code> exportado para restaurar clientes, credenciales y llaves SSH en 1 clic.</p>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="setup-import-file">Archivo de Configuración (.dearconfig)</label>
+          <input type="file" id="setup-import-file" accept=".dearconfig,.json" required style="padding: 8px; border: 1px dashed var(--border-color);">
+        </div>
+
+        <div class="form-group">
+          <label for="setup-import-pkg-pass">Contraseña del Archivo .dearconfig</label>
+          <input type="password" id="setup-import-pkg-pass" placeholder="Contraseña usada al exportar" required autocomplete="current-password">
+        </div>
+
+        <div class="form-group">
+          <label for="setup-import-username">Usuario Administrador para este equipo</label>
+          <input type="text" id="setup-import-username" placeholder="admin" required value="admin" autocomplete="username">
+        </div>
+
+        <div class="form-group">
+          <label for="setup-import-password">Nueva Contraseña de Administrador</label>
+          <input type="password" id="setup-import-password" placeholder="Mínimo 8 caracteres" minlength="8" required autocomplete="new-password">
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="setup-import-submit-btn">
+          <span>🚀 Importar Configuración e Iniciar</span>
+        </button>
+
+        <button type="button" class="btn btn-ghost btn-block btn-sm mt-2" id="btn-cancel-setup-import">
+          <span>← Volver a Configuración Manual</span>
         </button>
       </form>
     </div>
@@ -158,7 +203,7 @@
       </nav>
 
       <div class="sidebar-footer">
-        <div class="vault-status-indicator" id="vault-status-box">
+        <div class="vault-status-indicator" id="vault-status-box" style="cursor: pointer;" title="Haz clic para desbloquear o verificar estado del Vault">
           <span class="status-dot"></span>
           <span class="status-label">Vault Seguro: <strong id="vault-status-text">Activo</strong></span>
         </div>
@@ -722,6 +767,104 @@
               </form>
             </div>
 
+            <!-- Exportar / Importar Configuración Portable -->
+            <div class="glass-panel full-width">
+              <div class="panel-header">
+                <h3>📦 Portabilidad de Configuración (Exportar / Importar)</h3>
+                <span class="badge badge-success">AES-256 Cifrado Seguro</span>
+              </div>
+              <p class="text-muted" style="margin-bottom: 20px;">
+                Exporta todos tus servidores clientes, llaves privadas SSH, configuraciones de bases de datos, DTEs, credenciales Cloud y alertas a un archivo seguro <code>.dearconfig</code>. Podrás transferirlo a cualquier otra computadora o servidor y restaurar todo en segundos.
+              </p>
+              <div class="form-row" style="gap: 24px; align-items: stretch;">
+                <!-- Exportar -->
+                <div style="flex: 1; padding: 20px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px; display: flex; flex-direction: column;">
+                  <h4>📤 Exportar Configuración</h4>
+                  <p class="text-muted" style="font-size: 0.85rem; margin: 8px 0 16px 0; flex: 1;">
+                    Genera un paquete cifrado con todos tus clientes y credenciales.
+                  </p>
+                  <form id="export-config-form" class="flow-form">
+                    <div class="form-group">
+                      <label for="export-config-password">Contraseña para Cifrar el Archivo</label>
+                      <input type="password" id="export-config-password" placeholder="Mínimo 6 caracteres" minlength="6" required autocomplete="new-password">
+                      <small class="helper-text">⚠️ Recuerda esta contraseña. Se requerirá para descifrar e importar el archivo.</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" id="btn-export-config">
+                      <span>💾 Descargar Configuración Cifrada (.dearconfig)</span>
+                    </button>
+                  </form>
+                </div>
+
+                <!-- Importar -->
+                <div style="flex: 1; padding: 20px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 12px; display: flex; flex-direction: column;">
+                  <h4>📥 Importar Configuración</h4>
+                  <p class="text-muted" style="font-size: 0.85rem; margin: 8px 0 16px 0; flex: 1;">
+                    Carga un archivo <code>.dearconfig</code> para incorporar o actualizar clientes y configuraciones.
+                  </p>
+                  <form id="import-config-form" class="flow-form">
+                    <div class="form-group">
+                      <label for="import-config-file">Seleccionar Archivo (.dearconfig)</label>
+                      <input type="file" id="import-config-file" accept=".dearconfig,.json" required style="padding: 8px; border: 1px dashed var(--border-color);">
+                    </div>
+                    <div class="form-group">
+                      <label for="import-config-password">Contraseña del Archivo</label>
+                      <input type="password" id="import-config-password" placeholder="Contraseña usada al exportar" required autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="btn btn-outline btn-block" id="btn-import-config" style="border-color: var(--accent-cyan); color: var(--accent-cyan);">
+                      <span>🔄 Restaurar / Fusionar Configuración</span>
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+              <!-- Base de Datos Física SQLite: Descargar y Restaurar -->
+              <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                <div class="form-row" style="gap: 20px; align-items: stretch;">
+                  <!-- Descargar -->
+                  <div style="flex: 1; padding: 16px; background: rgba(255,255,255,0.015); border: 1px solid var(--border-color); border-radius: 10px; display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                      <strong>🗄️ Descargar Base de Datos (dearbackup.db)</strong>
+                      <p class="text-muted" style="font-size: 0.85rem; margin: 4px 0 12px 0;">Descarga el archivo físico SQLite consolidado con todos los clientes y configuraciones.</p>
+                    </div>
+                    <button type="button" class="btn btn-outline btn-block" id="btn-download-raw-db" style="border-color: var(--accent-green); color: var(--accent-green);">
+                      <span>📥 Descargar dearbackup.db</span>
+                    </button>
+                  </div>
+                  <!-- Restaurar -->
+                  <div style="flex: 1; padding: 16px; background: rgba(255,255,255,0.015); border: 1px solid var(--border-color); border-radius: 10px; display: flex; flex-direction: column; justify-content: space-between;">
+                    <div>
+                      <strong>📤 Subir y Restaurar dearbackup.db</strong>
+                      <p class="text-muted" style="font-size: 0.85rem; margin: 4px 0 10px 0;">Carga un archivo SQLite previo para restaurar el sistema al instante.</p>
+                    </div>
+                    <form id="restore-db-form" class="flow-form" style="margin-top: 4px;">
+                      <div class="form-group" style="margin-bottom: 8px;">
+                        <input type="file" id="restore-db-file" accept=".db,.sqlite" required style="padding: 6px; border: 1px dashed var(--border-color); width: 100%;">
+                      </div>
+                      <button type="submit" class="btn btn-outline btn-block" id="btn-restore-db" style="border-color: var(--accent-amber); color: var(--accent-amber);">
+                        <span>🔄 Cargar y Restaurar BD</span>
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Auto-Respaldo Automatizado del Sistema (Cron 03:00 AM & Cloud) -->
+              <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                <div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <strong>⏰ Proceso Automatizado Nocturno (03:00 AM)</strong>
+                    <span class="badge badge-success">Activo en segundo plano</span>
+                  </div>
+                  <p class="text-muted" style="font-size: 0.85rem; margin: 2px 0 0 0;" id="self-backup-status-text">
+                    El sistema genera un snapshot diario automático de la base de datos y lo replica a tu almacenamiento en la nube (S3/R2).
+                  </p>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" id="btn-trigger-self-backup" style="border-color: var(--accent-cyan); color: var(--accent-cyan);">
+                  <span>⚡ Ejecutar Auto-Respaldo Ahora</span>
+                </button>
+              </div>
+            </div>
+
           </div>
         </section>
 
@@ -1229,11 +1372,46 @@
     </div>
   </div>
 
+  <!-- ========================================================================= -->
+  <!-- MODAL: DESBLOQUEO MANUAL DEL VAULT -->
+  <!-- ========================================================================= -->
+  <div id="vault-unlock-modal" class="modal-overlay hidden">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h2>🔐 Desbloquear Vault de Credenciales</h2>
+        <button class="modal-close-btn" id="vault-unlock-modal-close">✕</button>
+      </div>
+      <form id="vault-unlock-form" class="modal-body flow-form">
+        <p class="text-muted">Ingresa tu Frase Secreta del Vault para desbloquear el acceso a las llaves SSH y contraseñas cifradas:</p>
+        
+        <div class="form-group">
+          <label for="vault-unlock-phrase">Frase Secreta del Vault</label>
+          <input type="password" id="vault-unlock-phrase" placeholder="••••••••••••" required autocomplete="current-password">
+        </div>
+
+        <div class="form-group checkbox-group">
+          <label class="switch">
+            <input type="checkbox" id="vault-unlock-remember" checked>
+            <span class="slider"></span>
+          </label>
+          <span>Recordar desbloqueo en este servidor (auto-desbloquear tras reinicios)</span>
+        </div>
+
+        <div class="modal-footer mt-4" style="display: flex; gap: 12px; justify-content: flex-end;">
+          <button type="button" class="btn btn-ghost" id="btn-cancel-vault-unlock">Cancelar</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-vault-unlock">
+            <span>🔓 Desbloquear Vault</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Toast Notification Container -->
   <div id="toast-container" class="toast-container"></div>
 
   <!-- Scripts -->
-  <script src="js/api.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/api.js?v=1.2.2"></script>
+  <script src="js/app.js?v=1.2.2"></script>
 </body>
 </html>

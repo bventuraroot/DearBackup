@@ -1,8 +1,14 @@
 import { Router, Response } from 'express';
+import path from 'path';
+import fs from 'fs';
+import Database from 'better-sqlite3';
+import { db } from '../db/database';
 import { requireAuth, AuthRequest } from './auth.routes';
 import { VaultService } from '../services/vault.service';
 import { NotifyService } from '../services/notify.service';
 import { CloudService } from '../services/cloud.service';
+import { ConfigBackupService } from '../services/config-backup.service';
+import { SelfBackupService } from '../services/self-backup.service';
 
 const router = Router();
 
@@ -286,6 +292,161 @@ router.post('/cloud/test', requireAuth, async (req: AuthRequest, res: Response) 
   });
 
   res.json(result);
+});
+
+/**
+ * Exportar Configuración Completa (.dearconfig)
+ */
+router.post('/export-config', requireAuth, (req: AuthRequest, res: Response) => {
+  try {
+    const { passphrase } = req.body;
+    if (!passphrase || passphrase.length < 6) {
+      return res.status(400).json({ error: 'La contraseña de protección debe tener al menos 6 caracteres.' });
+    }
+
+    const encryptedPackage = ConfigBackupService.exportConfig(passphrase);
+    res.json({
+      success: true,
+      filename: `dearbackup-config-${new Date().toISOString().slice(0, 10)}.dearconfig`,
+      package: encryptedPackage
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * Importar Configuración Completa (.dearconfig)
+ */
+router.post('/import-config', requireAuth, (req: AuthRequest, res: Response) => {
+  try {
+    const { packageData, passphrase } = req.body;
+    if (!packageData || !passphrase) {
+      return res.status(400).json({ error: 'El archivo de configuración y la contraseña son requeridos.' });
+    }
+
+    const result = ConfigBackupService.importConfig(packageData, passphrase);
+    res.json({
+      success: true,
+      message: `¡Configuración restaurada con éxito! Se importaron ${result.importedClients} clientes y ${result.importedSettings} configuraciones del sistema.`,
+      result
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * Descargar directamente la base de datos SQLite (.db) con checkpoint de WAL
+ */
+router.get('/download-database', requireAuth, (req: AuthRequest, res: Response) => {
+  try {
+    // Forzar checkpoint para vaciar cualquier cambio pendiente del archivo WAL a dearbackup.db
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    const dbDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+    const dbPath = path.join(dbDir, 'dearbackup.db');
+    if (!fs.existsSync(dbPath)) {
+      return res.status(404).json({ error: 'El archivo de base de datos no existe.' });
+    }
+    const filename = `dearbackup-${new Date().toISOString().slice(0, 10)}.db`;
+    res.download(dbPath, filename);
+  } catch (err: any) {
+    res.status(500).json({ error: `Error exportando base de datos: ${err.message}` });
+  }
+});
+
+/**
+ * Ejecutar Auto-Respaldo de Base de Datos y replicación Cloud de inmediato
+ */
+router.post('/auto-backup-now', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await SelfBackupService.runSelfBackup();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: `Fallo en auto-respaldo: ${err.message}` });
+  }
+});
+
+/**
+ * Obtener estado del último auto-respaldo
+ */
+router.get('/self-backup-status', requireAuth, (req: AuthRequest, res: Response) => {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('last_self_backup_info') as { value: string } | undefined;
+  if (!row) {
+    return res.json({ configured: true, lastRun: null });
+  }
+  try {
+    res.json({ configured: true, ...JSON.parse(row.value) });
+  } catch {
+    res.json({ configured: true, lastRun: null });
+  }
+});
+
+/**
+ * Restaurar archivo de base de datos SQLite (.db) subido desde la interfaz web
+ */
+router.post('/restore-database', requireAuth, (req: AuthRequest, res: Response) => {
+  try {
+    const { dbBase64 } = req.body;
+    if (!dbBase64) {
+      return res.status(400).json({ error: 'No se envió ningún archivo de base de datos.' });
+    }
+
+    const buffer = Buffer.from(dbBase64, 'base64');
+    if (buffer.length < 100 || buffer.subarray(0, 15).toString() !== 'SQLite format 3') {
+      return res.status(400).json({ error: 'El archivo subido no es una base de datos SQLite válida (cabecera no coincide).' });
+    }
+
+    const dbDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+    const dbPath = path.join(dbDir, 'dearbackup.db');
+    const backupOldPath = path.join(dbDir, `dearbackup-backup-pre-restore-${Date.now()}.db`);
+
+    // 1. Checkpoint actual
+    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) {}
+
+    // 2. Backup de seguridad antes de sobreescribir
+    if (fs.existsSync(dbPath)) {
+      fs.copyFileSync(dbPath, backupOldPath);
+    }
+
+    // 3. Escribir temporalmente y validar tablas
+    const tempRestore = path.join(dbDir, `restore-temp-${Date.now()}.db`);
+    fs.writeFileSync(tempRestore, buffer);
+
+    let clientCount = 0;
+    let userCount = 0;
+    try {
+      const testDb = new Database(tempRestore, { readonly: true });
+      userCount = (testDb.prepare('SELECT count(*) as count FROM users').get() as any)?.count ?? 0;
+      clientCount = (testDb.prepare('SELECT count(*) as count FROM clients').get() as any)?.count ?? 0;
+      testDb.close();
+    } catch (testErr: any) {
+      if (fs.existsSync(tempRestore)) fs.unlinkSync(tempRestore);
+      return res.status(400).json({ error: `La base de datos está dañada o incompatible: ${testErr.message}` });
+    }
+
+    // 4. Limpiar WAL/SHM antiguos
+    const walPath = path.join(dbDir, 'dearbackup.db-wal');
+    const shmPath = path.join(dbDir, 'dearbackup.db-shm');
+    if (fs.existsSync(walPath)) try { fs.unlinkSync(walPath); } catch (_) {}
+    if (fs.existsSync(shmPath)) try { fs.unlinkSync(shmPath); } catch (_) {}
+
+    // 5. Sobreescribir archivo principal
+    fs.copyFileSync(tempRestore, dbPath);
+    try { fs.unlinkSync(tempRestore); } catch (_) {}
+
+    // 6. Refrescar WAL
+    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) {}
+
+    res.json({
+      success: true,
+      message: `¡Base de datos restaurada con éxito! Se cargaron ${clientCount} clientes y ${userCount} usuarios registrados.`,
+      clientCount,
+      userCount
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Fallo al restaurar base de datos: ${err.message}` });
+  }
 });
 
 export default router;

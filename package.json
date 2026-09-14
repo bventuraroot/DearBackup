@@ -7,7 +7,9 @@
     "build": "tsc && node scripts/copy-public.js",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "recovery": "node dist/scripts/recovery.js"
+    "recovery": "node dist/scripts/recovery.js",
+    "export-db": "node scripts/export-database.js",
+    "import-db": "node scripts/import-database.js"
   },
   "keywords": [
     "backup",

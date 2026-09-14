@@ -84,6 +84,13 @@ server.listen(PORT, () => {
   ║                                                                      ║
   ╚══════════════════════════════════════════════════════════════════════╝
   `);
+    // Intentar auto-desbloqueo seguro del Vault (desde .vault_key o variable de entorno)
+    try {
+        vault_service_1.VaultService.tryAutoUnlock();
+    }
+    catch (e) {
+        console.warn('Aviso auto-desbloqueo:', e.message);
+    }
     // Inicializar llave SSH por defecto
     try {
         vault_service_1.VaultService.getOrCreateSystemSSHKey();
