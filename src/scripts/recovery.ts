@@ -19,16 +19,44 @@ function question(query: string): Promise<string> {
 }
 
 async function main() {
+  const saltRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('master_vault_salt') as any;
+  const checkRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('master_vault_check') as any;
+  const keyPath = VaultService.getVaultKeyFilePath();
+  let fileKey = fs.existsSync(keyPath) ? fs.readFileSync(keyPath, 'utf8').trim() : null;
+  let isKeyMatching = false;
+  let vaultStatus = '🔒 Bloqueado / No verificado';
+
+  if (fileKey && saltRow && checkRow) {
+    const salt = Buffer.from(saltRow.value, 'hex');
+    const derivedKey = crypto.pbkdf2Sync(fileKey, salt, 100000, 32, 'sha256');
+    const testHash = crypto.createHmac('sha256', derivedKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
+    if (testHash === checkRow.value) {
+      vaultStatus = '🔓 Desbloqueado y Verificado';
+      isKeyMatching = true;
+      VaultService.setMasterKeyDirect(derivedKey, fileKey, false);
+    } else {
+      vaultStatus = '⚠️ Clave en .vault_key NO coincide con la base de datos';
+    }
+  }
+
+  const usersCount = (db.prepare('SELECT count(*) as count FROM users').get() as any)?.count || 0;
+  const clientsCount = (db.prepare('SELECT count(*) as count FROM clients').get() as any)?.count || 0;
+
   console.log(`
   ╔══════════════════════════════════════════════════════════════════════╗
   ║                                                                      ║
   ║   🛡️  DEARBACKUP - HERRAMIENTA DE RECUPERACIÓN DE EMERGENCIA        ║
   ║                                                                      ║
   ╚══════════════════════════════════════════════════════════════════════╝
+
+  📊 ESTADO DEL SISTEMA:
+  • Vault: ${vaultStatus}
+  • Clave en disco (.vault_key): ${fileKey ? `"${fileKey}"` : '(ninguna)'}
+  • Clientes: ${clientsCount} | Usuarios: ${usersCount}
   `);
 
   console.log('Selecciona la acción que deseas realizar:');
-  console.log('  1. 🔐 Restablecer Frase Secreta del Vault (Nueva Master Key)');
+  console.log('  1. 🔐 Restablecer / Rotar Frase Secreta del Vault');
   console.log('  2. 🔑 Ver y Restablecer Contraseña de Administrador');
   console.log('  3. 📲 Desactivar 2FA / Passkeys de emergencia');
   console.log('  4. 🔓 Descifrar un archivo de respaldo (.enc)');
@@ -39,9 +67,12 @@ async function main() {
   const choice = (await question('Ingresa una opción (1-7): ')).trim();
 
   if (choice === '1') {
-    console.log('\n--- 🔐 RESTABLECER FRASE SECRETA DEL VAULT ---');
-    console.log('ℹ️ Esta frase permite derivar la clave que cifra y descifra las contraseñas.');
-    const newPhrase = await question('Ingresa la NUEVA Frase Secreta del Vault (min. 8 caracteres): ');
+    console.log('\n--- 🔐 RESTABLECER O ROTAR FRASE SECRETA DEL VAULT ---');
+    if (fileKey && isKeyMatching) {
+      console.log(`ℹ️ Clave activa detectada: "${fileKey}"`);
+    }
+    console.log('ℹ️ Esta acción configurará la nueva clave y re-cifrará las credenciales de clientes.');
+    const newPhrase = (await question('Ingresa la NUEVA Frase Secreta del Vault (min. 8 caracteres): ')).trim();
 
     if (!newPhrase || newPhrase.length < 8) {
       console.log('❌ Error: La frase debe tener al menos 8 caracteres.');
@@ -49,22 +80,38 @@ async function main() {
       return;
     }
 
-    // Generar nuevo salt y hash de verificación
-    const salt = crypto.randomBytes(16);
-    const derivedKey = crypto.pbkdf2Sync(newPhrase, salt, 100000, 32, 'sha256');
-    const testHash = crypto.createHmac('sha256', derivedKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
+    let rotated = false;
+    if (fileKey && isKeyMatching) {
+      rotated = VaultService.rotateMasterKey(fileKey, newPhrase);
+    } else {
+      const askOld = (await question('Ingresa la Frase Secreta ACTUAL para re-cifrar clientes (deja en blanco para forzar sobrescritura): ')).trim();
+      if (askOld) {
+        rotated = VaultService.rotateMasterKey(askOld, newPhrase);
+      }
+    }
 
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_salt', salt.toString('hex'));
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_check', testHash);
+    if (!rotated) {
+      console.log('⚠️ Re-inicializando clave maestra directamente...');
+      const salt = crypto.randomBytes(16);
+      const derivedKey = crypto.pbkdf2Sync(newPhrase, salt, 100000, 32, 'sha256');
+      const testHash = crypto.createHmac('sha256', derivedKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
 
-    // Regenerar llave SSH del sistema con la nueva frase y persistir .vault_key
-    VaultService.setMasterKeyDirect(derivedKey, newPhrase, true);
-    VaultService.persistKey(newPhrase);
-    VaultService.getOrCreateSystemSSHKey();
+      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_salt', salt.toString('hex'));
+      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_check', testHash);
 
-    console.log('\n✅ ¡Frase Secreta del Vault restablecida exitosamente!');
-    console.log('👉 Se actualizó el archivo .vault_key para desbloqueo automático.');
-    console.log('👉 Ahora puedes ingresar al panel con tu nueva frase.');
+      VaultService.setMasterKeyDirect(derivedKey, newPhrase, true);
+      VaultService.persistKey(newPhrase);
+      VaultService.getOrCreateSystemSSHKey();
+    }
+
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch (_) {}
+
+    console.log('\n✅ ¡Frase Secreta del Vault actualizada exitosamente!');
+    console.log(`👉 Clave guardada en: ${VaultService.getVaultKeyFilePath()} ("${newPhrase}")`);
+    console.log('💡 Si DearBackup está corriendo en Docker, reinicia el contenedor para cargarla:');
+    console.log('   docker restart dearbackup-app\n');
 
   } else if (choice === '2') {
     console.log('\n--- 🔑 VER Y RESTABLECER CONTRASEÑA DE ADMINISTRADOR ---');
@@ -286,10 +333,17 @@ async function main() {
     }
   }
 
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+  } catch (_) {}
+
   rl.close();
 }
 
 main().catch(err => {
   console.error('Error fatal en recuperación:', err);
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+  } catch (_) {}
   rl.close();
 });

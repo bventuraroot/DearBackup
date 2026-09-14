@@ -12,12 +12,15 @@ class ApiClient {
   }
 
   getToken() {
-    return localStorage.getItem(this.tokenKey);
+    const raw = localStorage.getItem(this.tokenKey);
+    if (!raw) return null;
+    return raw.trim().replace(/^["']|["']$/g, '');
   }
 
   setToken(token) {
     if (token) {
-      localStorage.setItem(this.tokenKey, token);
+      const cleanToken = String(token).trim().replace(/^["']|["']$/g, '');
+      localStorage.setItem(this.tokenKey, cleanToken);
     } else {
       localStorage.removeItem(this.tokenKey);
     }
@@ -52,9 +55,25 @@ class ApiClient {
         throw new Error('Sesión expirada');
       }
 
-      const data = await response.json();
+      const text = await response.text();
+      let data = null;
+      if (text && text.trim().length > 0) {
+        try {
+          data = JSON.parse(text);
+        } catch (_) {
+          // Si el servidor respondió con texto plano o HTML (ej: 500/502/404)
+          if (!response.ok) {
+            const cleanMsg = text.replace(/<[^>]*>?/gm, '').trim();
+            throw new Error(`Error del servidor (${response.status}): ${cleanMsg || response.statusText}`);
+          }
+          data = { message: text };
+        }
+      } else {
+        data = {};
+      }
+
       if (!response.ok) {
-        throw new Error(data.error || 'Error en la solicitud');
+        throw new Error(data?.error || data?.message || `Error en la solicitud (${response.status}: ${response.statusText})`);
       }
       return data;
     } catch (err) {

@@ -290,7 +290,7 @@ export class VaultService {
     const oldKey = this.masterKey;
     if (!oldKey) return false;
 
-    // Obtener todos los secretos actuales y descifrarlos en memoria
+    // 1. Obtener todos los secretos actuales de clientes y descifrarlos en memoria
     const clients = db.prepare('SELECT id, ssh_password, ssh_private_key, ssh_passphrase, db_pass FROM clients').all() as any[];
     const decryptedClients = clients.map(c => ({
       id: c.id,
@@ -300,25 +300,56 @@ export class VaultService {
       db_pass: c.db_pass ? this.decrypt(c.db_pass) : null
     }));
 
-    const encryptedSettings = db.prepare('SELECT key, value FROM settings WHERE is_encrypted = 1').all() as any[];
-    const decryptedSettings = encryptedSettings.map(s => ({
-      key: s.key,
-      value: this.decrypt(s.value)
-    }));
+    // 2. Descifrar configuraciones de settings preservando estructura JSON
+    const smtpRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('smtp_config') as any;
+    let decryptedSmtpPass: string | null = null;
+    let smtpObj: any = null;
+    if (smtpRow?.value) {
+      try {
+        smtpObj = JSON.parse(smtpRow.value);
+        if (smtpObj.pass) decryptedSmtpPass = this.decrypt(smtpObj.pass);
+      } catch (_) {}
+    }
 
-    // Generar nuevo salt y derivar nueva clave
+    const s3Row = db.prepare('SELECT value FROM settings WHERE key = ?').get('cloud_s3_config') as any;
+    let decryptedS3Secret: string | null = null;
+    let s3Obj: any = null;
+    if (s3Row?.value) {
+      try {
+        s3Obj = JSON.parse(s3Row.value);
+        if (s3Obj.secretAccessKey) decryptedS3Secret = this.decrypt(s3Obj.secretAccessKey);
+      } catch (_) {}
+    }
+
+    const tgRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('telegram_config') as any;
+    let decryptedTgToken: string | null = null;
+    let tgObj: any = null;
+    if (tgRow?.value) {
+      try {
+        tgObj = JSON.parse(tgRow.value);
+        if (tgObj.botToken) decryptedTgToken = this.decrypt(tgObj.botToken);
+      } catch (_) {}
+    }
+
+    const privKeyRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('system_ssh_key_priv') as any;
+    let decryptedSystemPrivKey: string | null = null;
+    if (privKeyRow?.value) {
+      decryptedSystemPrivKey = this.decrypt(privKeyRow.value);
+    }
+
+    // 3. Generar nuevo salt y derivar nueva clave
     const newSalt = crypto.randomBytes(SALT_LENGTH);
     const newMasterKey = crypto.pbkdf2Sync(newPhrase, newSalt, ITERATIONS, KEY_LENGTH, 'sha256');
     const newTestHash = crypto.createHmac('sha256', newMasterKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
 
-    // Cambiar a la nueva clave
+    // 4. Cambiar a la nueva clave en memoria
     this.masterKey = newMasterKey;
     this.secretPhrase = newPhrase;
 
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_salt', newSalt.toString('hex'));
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_check', newTestHash);
 
-    // Re-cifrar clientes con la nueva clave
+    // 5. Re-cifrar clientes con la nueva clave
     const updateClient = db.prepare(`
       UPDATE clients SET
         ssh_password = ?,
@@ -338,11 +369,39 @@ export class VaultService {
       );
     }
 
-    // Re-cifrar configuraciones de settings
-    const updateSetting = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
-    for (const s of decryptedSettings) {
-      updateSetting.run(this.encrypt(s.value), s.key);
+    // 6. Re-cifrar configuraciones sin romper el JSON
+    if (smtpObj) {
+      if (decryptedSmtpPass) {
+        smtpObj.pass = this.encrypt(decryptedSmtpPass);
+      }
+      db.prepare('INSERT OR REPLACE INTO settings (key, value, is_encrypted) VALUES (?, ?, 1)').run('smtp_config', JSON.stringify(smtpObj));
     }
+
+    if (s3Obj) {
+      if (decryptedS3Secret) {
+        s3Obj.secretAccessKey = this.encrypt(decryptedS3Secret);
+      }
+      db.prepare('INSERT OR REPLACE INTO settings (key, value, is_encrypted) VALUES (?, ?, 1)').run('cloud_s3_config', JSON.stringify(s3Obj));
+    }
+
+    if (tgObj) {
+      if (decryptedTgToken) {
+        tgObj.botToken = this.encrypt(decryptedTgToken);
+      }
+      db.prepare('INSERT OR REPLACE INTO settings (key, value, is_encrypted) VALUES (?, ?, 1)').run('telegram_config', JSON.stringify(tgObj));
+    }
+
+    if (decryptedSystemPrivKey) {
+      db.prepare('INSERT OR REPLACE INTO settings (key, value, is_encrypted) VALUES (?, ?, 1)').run('system_ssh_key_priv', this.encrypt(decryptedSystemPrivKey));
+    }
+
+    // 7. Persistir clave en disco para auto-desbloqueo
+    this.persistKey(newPhrase);
+
+    // 8. Forzar checkpoint de SQLite WAL para que los cambios se sincronicen a disco inmediatamente
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch (_) {}
 
     return true;
   }

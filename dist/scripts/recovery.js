@@ -20,15 +20,41 @@ function question(query) {
     return new Promise((resolve) => rl.question(query, resolve));
 }
 async function main() {
+    const saltRow = database_1.db.prepare('SELECT value FROM settings WHERE key = ?').get('master_vault_salt');
+    const checkRow = database_1.db.prepare('SELECT value FROM settings WHERE key = ?').get('master_vault_check');
+    const keyPath = vault_service_1.VaultService.getVaultKeyFilePath();
+    let fileKey = fs_1.default.existsSync(keyPath) ? fs_1.default.readFileSync(keyPath, 'utf8').trim() : null;
+    let isKeyMatching = false;
+    let vaultStatus = '🔒 Bloqueado / No verificado';
+    if (fileKey && saltRow && checkRow) {
+        const salt = Buffer.from(saltRow.value, 'hex');
+        const derivedKey = crypto_1.default.pbkdf2Sync(fileKey, salt, 100000, 32, 'sha256');
+        const testHash = crypto_1.default.createHmac('sha256', derivedKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
+        if (testHash === checkRow.value) {
+            vaultStatus = '🔓 Desbloqueado y Verificado';
+            isKeyMatching = true;
+            vault_service_1.VaultService.setMasterKeyDirect(derivedKey, fileKey, false);
+        }
+        else {
+            vaultStatus = '⚠️ Clave en .vault_key NO coincide con la base de datos';
+        }
+    }
+    const usersCount = database_1.db.prepare('SELECT count(*) as count FROM users').get()?.count || 0;
+    const clientsCount = database_1.db.prepare('SELECT count(*) as count FROM clients').get()?.count || 0;
     console.log(`
   ╔══════════════════════════════════════════════════════════════════════╗
   ║                                                                      ║
   ║   🛡️  DEARBACKUP - HERRAMIENTA DE RECUPERACIÓN DE EMERGENCIA        ║
   ║                                                                      ║
   ╚══════════════════════════════════════════════════════════════════════╝
+
+  📊 ESTADO DEL SISTEMA:
+  • Vault: ${vaultStatus}
+  • Clave en disco (.vault_key): ${fileKey ? `"${fileKey}"` : '(ninguna)'}
+  • Clientes: ${clientsCount} | Usuarios: ${usersCount}
   `);
     console.log('Selecciona la acción que deseas realizar:');
-    console.log('  1. 🔐 Restablecer Frase Secreta del Vault (Nueva Master Key)');
+    console.log('  1. 🔐 Restablecer / Rotar Frase Secreta del Vault');
     console.log('  2. 🔑 Ver y Restablecer Contraseña de Administrador');
     console.log('  3. 📲 Desactivar 2FA / Passkeys de emergencia');
     console.log('  4. 🔓 Descifrar un archivo de respaldo (.enc)');
@@ -37,27 +63,46 @@ async function main() {
     console.log('  7. 🚪 Salir\n');
     const choice = (await question('Ingresa una opción (1-7): ')).trim();
     if (choice === '1') {
-        console.log('\n--- 🔐 RESTABLECER FRASE SECRETA DEL VAULT ---');
-        console.log('ℹ️ Esta frase permite derivar la clave que cifra y descifra las contraseñas.');
-        const newPhrase = await question('Ingresa la NUEVA Frase Secreta del Vault (min. 8 caracteres): ');
+        console.log('\n--- 🔐 RESTABLECER O ROTAR FRASE SECRETA DEL VAULT ---');
+        if (fileKey && isKeyMatching) {
+            console.log(`ℹ️ Clave activa detectada: "${fileKey}"`);
+        }
+        console.log('ℹ️ Esta acción configurará la nueva clave y re-cifrará las credenciales de clientes.');
+        const newPhrase = (await question('Ingresa la NUEVA Frase Secreta del Vault (min. 8 caracteres): ')).trim();
         if (!newPhrase || newPhrase.length < 8) {
             console.log('❌ Error: La frase debe tener al menos 8 caracteres.');
             rl.close();
             return;
         }
-        // Generar nuevo salt y hash de verificación
-        const salt = crypto_1.default.randomBytes(16);
-        const derivedKey = crypto_1.default.pbkdf2Sync(newPhrase, salt, 100000, 32, 'sha256');
-        const testHash = crypto_1.default.createHmac('sha256', derivedKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
-        database_1.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_salt', salt.toString('hex'));
-        database_1.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_check', testHash);
-        // Regenerar llave SSH del sistema con la nueva frase y persistir .vault_key
-        vault_service_1.VaultService.setMasterKeyDirect(derivedKey, newPhrase, true);
-        vault_service_1.VaultService.persistKey(newPhrase);
-        vault_service_1.VaultService.getOrCreateSystemSSHKey();
-        console.log('\n✅ ¡Frase Secreta del Vault restablecida exitosamente!');
-        console.log('👉 Se actualizó el archivo .vault_key para desbloqueo automático.');
-        console.log('👉 Ahora puedes ingresar al panel con tu nueva frase.');
+        let rotated = false;
+        if (fileKey && isKeyMatching) {
+            rotated = vault_service_1.VaultService.rotateMasterKey(fileKey, newPhrase);
+        }
+        else {
+            const askOld = (await question('Ingresa la Frase Secreta ACTUAL para re-cifrar clientes (deja en blanco para forzar sobrescritura): ')).trim();
+            if (askOld) {
+                rotated = vault_service_1.VaultService.rotateMasterKey(askOld, newPhrase);
+            }
+        }
+        if (!rotated) {
+            console.log('⚠️ Re-inicializando clave maestra directamente...');
+            const salt = crypto_1.default.randomBytes(16);
+            const derivedKey = crypto_1.default.pbkdf2Sync(newPhrase, salt, 100000, 32, 'sha256');
+            const testHash = crypto_1.default.createHmac('sha256', derivedKey).update('DEAR_BACKUP_VAULT_TEST').digest('hex');
+            database_1.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_salt', salt.toString('hex'));
+            database_1.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('master_vault_check', testHash);
+            vault_service_1.VaultService.setMasterKeyDirect(derivedKey, newPhrase, true);
+            vault_service_1.VaultService.persistKey(newPhrase);
+            vault_service_1.VaultService.getOrCreateSystemSSHKey();
+        }
+        try {
+            database_1.db.pragma('wal_checkpoint(TRUNCATE)');
+        }
+        catch (_) { }
+        console.log('\n✅ ¡Frase Secreta del Vault actualizada exitosamente!');
+        console.log(`👉 Clave guardada en: ${vault_service_1.VaultService.getVaultKeyFilePath()} ("${newPhrase}")`);
+        console.log('💡 Si DearBackup está corriendo en Docker, reinicia el contenedor para cargarla:');
+        console.log('   docker restart dearbackup-app\n');
     }
     else if (choice === '2') {
         console.log('\n--- 🔑 VER Y RESTABLECER CONTRASEÑA DE ADMINISTRADOR ---');
@@ -256,9 +301,17 @@ async function main() {
             console.log('Operación cancelada.');
         }
     }
+    try {
+        database_1.db.pragma('wal_checkpoint(TRUNCATE)');
+    }
+    catch (_) { }
     rl.close();
 }
 main().catch(err => {
     console.error('Error fatal en recuperación:', err);
+    try {
+        database_1.db.pragma('wal_checkpoint(TRUNCATE)');
+    }
+    catch (_) { }
     rl.close();
 });

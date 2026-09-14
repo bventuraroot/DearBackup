@@ -1383,14 +1383,23 @@ document.addEventListener('DOMContentLoaded', () => {
   // 9. VISTA: RESPALDOS & HISTORIAL
   // =========================================================================
   async function loadBackupsHistory() {
-    const clientId = document.getElementById('filter-backup-client').value;
-    const status = document.getElementById('filter-backup-status').value;
+    const clientSelect = document.getElementById('filter-backup-client');
+    const statusSelect = document.getElementById('filter-backup-status');
+    const clientId = clientSelect ? clientSelect.value : '';
+    const status = statusSelect ? statusSelect.value : '';
     const tbody = document.getElementById('backups-tbody');
+
+    if (!tbody) return;
 
     tbody.innerHTML = '<tr><td colspan="8" class="text-center py-6 text-muted">Cargando registros de respaldos...</td></tr>';
 
     try {
-      const url = `/backups/logs?${clientId ? `clientId=${clientId}&` : ''}${status ? `status=${status}&` : ''}limit=100`;
+      const params = new URLSearchParams();
+      if (clientId) params.set('clientId', clientId);
+      if (status) params.set('status', status);
+      params.set('limit', '100');
+
+      const url = `/backups/logs?${params.toString()}`;
       const logs = await API.get(url);
 
       if (!Array.isArray(logs) || logs.length === 0) {
@@ -1399,12 +1408,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       tbody.innerHTML = logs.map(log => {
-        const statusClass = log.status === 'success' ? 'success' : log.status === 'failed' ? 'failed' : 'running';
-        const statusText = log.status === 'success' ? 'Exitoso' : log.status === 'failed' ? 'Fallido' : 'En proceso';
+        const statusClass = log.status === 'success' ? 'success' : log.status === 'failed' ? 'failed' : log.status === 'purged' ? 'warning' : 'running';
+        const statusText = log.status === 'success' ? 'Exitoso' : log.status === 'failed' ? 'Fallido' : log.status === 'purged' ? 'Purgado' : 'En proceso';
         let dateFormatted = '—';
         if (log.start_time) {
           try {
-            dateFormatted = new Date(log.start_time).toLocaleString();
+            const isoTime = String(log.start_time).replace(' ', 'T');
+            const d = new Date(isoTime);
+            dateFormatted = isNaN(d.getTime()) ? String(log.start_time) : d.toLocaleString();
           } catch (_) {
             dateFormatted = String(log.start_time);
           }
@@ -1413,6 +1424,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const checksumShort = log.checksum_sha256 ? `${log.checksum_sha256.substring(0, 10)}...` : '-';
         const clientName = log.client_name || 'Cliente';
         const duration = log.duration_seconds !== undefined ? log.duration_seconds : 0;
+        const logId = String(log.id || '');
 
         return `
           <tr>
@@ -1425,14 +1437,14 @@ document.addEventListener('DOMContentLoaded', () => {
             <td>${log.is_replicated_cloud ? '☁️ S3' : '—'}</td>
             <td>
               <div style="display: flex; gap: 4px;">
-                <button class="btn btn-sm btn-ghost btn-view-log-detail" data-log-id="${log.id}" title="Ver Consola">📜 Logs</button>
+                <button class="btn btn-sm btn-ghost btn-view-log-detail" data-log-id="${logId}" title="Ver Consola">📜 Logs</button>
                 ${log.status === 'success' ? `
-                  <button class="btn btn-sm btn-primary btn-inspect-backup" data-log-id="${log.id}" title="Ver contenido interno del respaldo">🔍 Ver Archivos</button>
-                  <button class="btn btn-sm btn-outline btn-download-dec" data-log-id="${log.id}" title="Descargar Descifrado (.tar.gz)">🔓 Bajar</button>
-                  <button class="btn btn-sm btn-ghost btn-download-enc" data-log-id="${log.id}" title="Descargar Cifrado AES-256">🔒 .enc</button>
-                  <button class="btn btn-sm btn-ghost btn-share-link" data-log-id="${log.id}" title="Generar Enlace Seguro">🔗</button>
+                  <button class="btn btn-sm btn-primary btn-inspect-backup" data-log-id="${logId}" title="Ver contenido interno del respaldo">🔍 Ver Archivos</button>
+                  <button class="btn btn-sm btn-outline btn-download-dec" data-log-id="${logId}" title="Descargar Descifrado (.tar.gz)">🔓 Bajar</button>
+                  <button class="btn btn-sm btn-ghost btn-download-enc" data-log-id="${logId}" title="Descargar Cifrado AES-256">🔒 .enc</button>
+                  <button class="btn btn-sm btn-ghost btn-share-link" data-log-id="${logId}" title="Generar Enlace Seguro">🔗</button>
                 ` : ''}
-                <button class="btn btn-sm btn-ghost text-red btn-delete-log" data-log-id="${log.id}" title="Eliminar Registro">🗑️</button>
+                <button class="btn btn-sm btn-ghost text-red btn-delete-log" data-log-id="${logId}" title="Eliminar Registro">🗑️</button>
               </div>
             </td>
           </tr>
@@ -1464,6 +1476,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
     } catch (err) {
+      console.error('Error detallado cargando historial de respaldos:', err);
       tbody.innerHTML = `
         <tr>
           <td colspan="8" class="text-center py-6 text-red">
