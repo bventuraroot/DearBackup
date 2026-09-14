@@ -15,20 +15,26 @@ const router = (0, express_1.Router)();
  * Listar todos los clientes con métricas de su último backup
  */
 router.get('/', auth_routes_1.requireAuth, (req, res) => {
-    const clients = database_1.db.prepare(`
-    SELECT 
-      c.id, c.name, c.tags, c.ssh_host, c.ssh_port, c.ssh_user, c.ssh_auth_type,
-      c.db_type, c.db_connection_mode, c.db_docker_container, c.db_host, c.db_port, c.db_name, c.db_user,
-      c.dtes_path, c.cron_schedule, c.retention_days, c.retention_count,
-      c.is_active, c.notify_email, c.notify_telegram, c.created_at, c.updated_at,
-      (SELECT status FROM backup_logs WHERE client_id = c.id ORDER BY start_time DESC LIMIT 1) as last_backup_status,
-      (SELECT start_time FROM backup_logs WHERE client_id = c.id ORDER BY start_time DESC LIMIT 1) as last_backup_date,
-      (SELECT file_size_bytes FROM backup_logs WHERE client_id = c.id AND status = 'success' ORDER BY start_time DESC LIMIT 1) as last_backup_size,
-      (SELECT COUNT(*) FROM backup_logs WHERE client_id = c.id AND status = 'success') as total_success_backups
-    FROM clients c
-    ORDER BY c.name ASC
-  `).all();
-    res.json(clients);
+    try {
+        const clients = database_1.db.prepare(`
+      SELECT 
+        c.id, c.name, c.tags, c.ssh_host, c.ssh_port, c.ssh_user, c.ssh_auth_type,
+        c.db_type, c.db_connection_mode, c.db_docker_container, c.db_host, c.db_port, c.db_name, c.db_user,
+        c.dtes_path, c.cron_schedule, c.retention_days, c.retention_count,
+        c.is_active, c.notify_email, c.notify_telegram, c.created_at, c.updated_at,
+        (SELECT status FROM backup_logs WHERE client_id = c.id ORDER BY start_time DESC LIMIT 1) as last_backup_status,
+        (SELECT start_time FROM backup_logs WHERE client_id = c.id ORDER BY start_time DESC LIMIT 1) as last_backup_date,
+        (SELECT file_size_bytes FROM backup_logs WHERE client_id = c.id AND status = 'success' ORDER BY start_time DESC LIMIT 1) as last_backup_size,
+        (SELECT COUNT(*) FROM backup_logs WHERE client_id = c.id AND status = 'success') as total_success_backups
+      FROM clients c
+      ORDER BY c.name ASC
+    `).all();
+        res.json(clients);
+    }
+    catch (err) {
+        console.error('💥 Error al consultar /api/clients:', err);
+        res.status(500).json({ error: `Error al listar clientes: ${err.message}` });
+    }
 });
 /**
  * Obtener un cliente específico

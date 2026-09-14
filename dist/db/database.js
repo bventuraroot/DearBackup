@@ -336,6 +336,11 @@ function initDatabase() {
         checkAndAddColumn('backup_logs', 'log_output', 'TEXT');
         checkAndAddColumn('backup_logs', 'error_message', 'TEXT');
         checkAndAddColumn('backup_logs', 'duration_seconds', 'INTEGER DEFAULT 0');
+        checkAndAddColumn('backup_logs', 'created_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
+        // Columnas en share_links
+        checkAndAddColumn('share_links', 'id', 'TEXT');
+        checkAndAddColumn('share_links', 'downloads_remaining', 'INTEGER DEFAULT 3');
+        checkAndAddColumn('share_links', 'is_active', 'INTEGER DEFAULT 1');
         // Limpiar respaldos huérfanos que hayan quedado en estado 'running' por reinicios
         try {
             exports.db.prepare(`

@@ -31,6 +31,16 @@ const wss = new ws_1.WebSocketServer({ server, path: '/ws' });
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
+// Logging detallado de peticiones API
+app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+        if (req.path.startsWith('/api/')) {
+            console.log(`[HTTP] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - start}ms)`);
+        }
+    });
+    next();
+});
 // Servir frontend estático
 const publicPath = path_1.default.join(__dirname, 'public');
 app.use(express_1.default.static(publicPath));
@@ -40,6 +50,13 @@ app.use('/api/clients', clients_routes_1.default);
 app.use('/api/backups', backups_routes_1.default);
 app.use('/api/settings', settings_routes_1.default);
 app.use('/api/stats', stats_routes_1.default);
+// Manejo global de errores en APIs
+app.use((err, req, res, next) => {
+    console.error(`💥 [ERROR 500] en ${req.method} ${req.originalUrl}:`, err);
+    if (!res.headersSent) {
+        res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
+    }
+});
 // Fallback SPA
 app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/') || req.path.startsWith('/ws')) {

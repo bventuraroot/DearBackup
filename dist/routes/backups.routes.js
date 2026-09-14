@@ -56,35 +56,41 @@ router.post('/run-all', auth_routes_1.requireAuth, async (req, res) => {
  * Listar historial de respaldos con nombres de clientes resueltos
  */
 router.get('/logs', auth_routes_1.requireAuth, (req, res) => {
-    const clientId = req.query.clientId;
-    const status = req.query.status;
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    let query = `
-    SELECT 
-      b.id, b.client_id, COALESCE(c.name, b.client_name, 'Cliente') as client_name,
-      b.status, b.start_time, b.end_time, b.duration_seconds,
-      b.file_name, b.file_size_bytes, b.checksum_sha256,
-      b.is_encrypted, b.is_replicated_cloud, b.error_message, b.created_at
-    FROM backup_logs b
-    LEFT JOIN clients c ON b.client_id = c.id
-  `;
-    const conditions = [];
-    const params = [];
-    if (clientId) {
-        conditions.push('b.client_id = ?');
-        params.push(clientId);
+    try {
+        const clientId = req.query.clientId;
+        const status = req.query.status;
+        const limit = Math.min(Number(req.query.limit) || 50, 200);
+        let query = `
+      SELECT 
+        b.id, b.client_id, COALESCE(c.name, b.client_name, 'Cliente') as client_name,
+        b.status, b.start_time, b.end_time, b.duration_seconds,
+        b.file_name, b.file_size_bytes, b.checksum_sha256,
+        b.is_encrypted, b.is_replicated_cloud, b.error_message
+      FROM backup_logs b
+      LEFT JOIN clients c ON b.client_id = c.id
+    `;
+        const conditions = [];
+        const params = [];
+        if (clientId && clientId.trim() !== '') {
+            conditions.push('b.client_id = ?');
+            params.push(clientId.trim());
+        }
+        if (status && status.trim() !== '') {
+            conditions.push('b.status = ?');
+            params.push(status.trim());
+        }
+        if (conditions.length > 0) {
+            query += ' WHERE ' + conditions.join(' AND ');
+        }
+        query += ' ORDER BY b.start_time DESC LIMIT ?';
+        params.push(limit);
+        const logs = database_1.db.prepare(query).all(...params);
+        res.json(logs);
     }
-    if (status) {
-        conditions.push('b.status = ?');
-        params.push(status);
+    catch (err) {
+        console.error('💥 Error al consultar /api/backups/logs:', err);
+        res.status(500).json({ error: `Error en base de datos: ${err.message}` });
     }
-    if (conditions.length > 0) {
-        query += ' WHERE ' + conditions.join(' AND ');
-    }
-    query += ' ORDER BY b.start_time DESC LIMIT ?';
-    params.push(limit);
-    const logs = database_1.db.prepare(query).all(...params);
-    res.json(logs);
 });
 /**
  * Obtener detalle completo de un log (incluyendo terminal output y nombre de cliente)
