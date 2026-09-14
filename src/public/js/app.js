@@ -2150,6 +2150,7 @@ document.addEventListener('DOMContentLoaded', () => {
           for (let i = 0; i < len; i++) {
             binary += String.fromCharCode(bytes[i]);
           }
+          const base64 = btoa(binary);
           const payload = {
             dbBase64: base64,
             newAdminPassword: document.getElementById('restore-db-new-password')?.value || undefined,
