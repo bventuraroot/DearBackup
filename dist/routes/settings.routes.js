@@ -281,10 +281,25 @@ router.post('/import-config', auth_routes_1.requireAuth, (req, res) => {
         if (!packageData || !passphrase) {
             return res.status(400).json({ error: 'El archivo de configuración y la contraseña son requeridos.' });
         }
-        const result = config_backup_service_1.ConfigBackupService.importConfig(packageData, passphrase);
+        const preserveUsernames = req.user?.username ? [req.user.username] : [];
+        const result = config_backup_service_1.ConfigBackupService.importConfig(packageData, passphrase, { preserveUsernames });
+        const components = [];
+        if (result.importedClients > 0)
+            components.push(`${result.importedClients} clientes`);
+        if (result.hasSmtp)
+            components.push('Correo SMTP');
+        if (result.hasCloud)
+            components.push('Cloud S3/R2');
+        if (result.hasTelegram)
+            components.push('Telegram');
+        if (result.hasSshKey)
+            components.push('Llaves SSH');
+        if (result.importedUsers > 0)
+            components.push(`${result.importedUsers} usuarios`);
+        const detailsStr = components.length > 0 ? components.join(', ') : `${result.importedSettings} ajustes`;
         res.json({
             success: true,
-            message: `¡Configuración restaurada con éxito! Se importaron ${result.importedClients} clientes y ${result.importedSettings} configuraciones del sistema.`,
+            message: `¡Copia de configuración restaurada con éxito! Se sincronizaron: ${detailsStr}.`,
             result
         });
     }

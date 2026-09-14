@@ -109,7 +109,9 @@ router.post('/import-setup', async (req, res) => {
       VALUES (?, ?, ?, 'admin')
     `).run(userId, username.trim().toLowerCase(), passwordHash);
         // 3. Importar y re-cifrar clientes y configuraciones
-        const result = config_backup_service_1.ConfigBackupService.importConfig(packageData, packagePassphrase);
+        const result = config_backup_service_1.ConfigBackupService.importConfig(packageData, packagePassphrase, {
+            preserveUsernames: [username.trim().toLowerCase()]
+        });
         // 4. Refrescar / inicializar llave SSH
         vault_service_1.VaultService.getOrCreateSystemSSHKey();
         const token = jsonwebtoken_1.default.sign({ id: userId, username: username.trim().toLowerCase(), role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });

@@ -133,7 +133,9 @@ router.post('/import-setup', async (req: Request, res: Response) => {
     `).run(userId, username.trim().toLowerCase(), passwordHash);
 
     // 3. Importar y re-cifrar clientes y configuraciones
-    const result = ConfigBackupService.importConfig(packageData, packagePassphrase);
+    const result = ConfigBackupService.importConfig(packageData, packagePassphrase, {
+      preserveUsernames: [username.trim().toLowerCase()]
+    });
 
     // 4. Refrescar / inicializar llave SSH
     VaultService.getOrCreateSystemSSHKey();

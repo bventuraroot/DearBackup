@@ -147,7 +147,7 @@ class VaultService {
         return `${iv.toString('hex')}:${tag.toString('hex')}:${encrypted}`;
     }
     /**
-     * Descifra un texto cifrado con AES-256-GCM
+     * Descifra un texto cifrado con AES-256-GCM probando claves candidatas en orden de prioridad
      */
     static decrypt(cipherText) {
         if (!cipherText)
@@ -157,15 +157,33 @@ class VaultService {
             return cipherText; // No está cifrado en formato GCM
         }
         const [ivHex, tagHex, encryptedHex] = parts;
-        const key = this.masterKey || crypto_1.default.createHash('sha256').update(this.getEncryptionSecret()).digest();
         try {
             const iv = Buffer.from(ivHex, 'hex');
             const tag = Buffer.from(tagHex, 'hex');
-            const decipher = crypto_1.default.createDecipheriv(ALGORITHM, key, iv);
-            decipher.setAuthTag(tag);
-            let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
-            decrypted += decipher.final('utf8');
-            return decrypted;
+            const candidateKeys = [];
+            if (this.masterKey)
+                candidateKeys.push(this.masterKey);
+            if (this.secretPhrase) {
+                candidateKeys.push(crypto_1.default.createHash('sha256').update(this.secretPhrase).digest());
+            }
+            if (process.env.APP_SECRET) {
+                candidateKeys.push(crypto_1.default.createHash('sha256').update(process.env.APP_SECRET).digest());
+            }
+            candidateKeys.push(crypto_1.default.createHash('sha256').update('dearbackup_ultra_secure_master_token_2026_change_me').digest());
+            for (const key of candidateKeys) {
+                try {
+                    const decipher = crypto_1.default.createDecipheriv(ALGORITHM, key, iv);
+                    decipher.setAuthTag(tag);
+                    let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
+                    decrypted += decipher.final('utf8');
+                    return decrypted;
+                }
+                catch (_) {
+                    // Continuar con la siguiente clave candidata
+                }
+            }
+            console.error('Error al descifrar secreto del Vault: no se pudo autenticar con ninguna clave disponible.');
+            return '';
         }
         catch (e) {
             console.error('Error al descifrar secreto del Vault:', e.message);

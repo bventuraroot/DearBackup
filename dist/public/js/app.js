@@ -2045,7 +2045,21 @@ document.addEventListener('DOMContentLoaded', () => {
           document.body.removeChild(link);
           URL.revokeObjectURL(downloadUrl);
 
-          showToast('¡Archivo .dearconfig exportado y descargado con éxito!', 'success');
+          let msg = '¡Archivo .dearconfig exportado y descargado con éxito!';
+          if (res.package && res.package.summary) {
+            const s = res.package.summary;
+            const parts = [];
+            if (s.clientCount !== undefined) parts.push(`${s.clientCount} clientes`);
+            if (s.hasSmtpConfig) parts.push('Correo SMTP');
+            if (s.hasCloudConfig) parts.push('Cloud S3/R2');
+            if (s.hasTelegramConfig) parts.push('Telegram');
+            if (s.hasSystemSSHKey) parts.push('Llaves SSH');
+            if (s.userCount) parts.push(`${s.userCount} usuarios`);
+            if (parts.length > 0) {
+              msg = `¡Exportación exitosa! Se empaquetó copia exacta: ${parts.join(', ')}.`;
+            }
+          }
+          showToast(msg, 'success');
           document.getElementById('export-config-password').value = '';
         }
       } catch (err) {
